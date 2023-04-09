@@ -1,0 +1,40 @@
+diff --git a/async_simple/executors/SimpleExecutor.cpp b/async_simple/executors/SimpleExecutor.cpp
+index 09a2e40..d67719a 100644
+--- a/async_simple/executors/SimpleExecutor.cpp
++++ b/async_simple/executors/SimpleExecutor.cpp
+@@ -40,7 +40,7 @@ bool SimpleExecutor::checkin(Func func, Context ctx, ScheduleOptions opts) {
+         func();
+         return true;
+     }
+-    return _pool.scheduleById(std::move(func), id & (~kContextMask)) ==
++    return _pool.scheduleById(std::move(func), (int32_t)(id & (~kContextMask))) ==
+            util::ThreadPool::ERROR_NONE;
+ }
+ 
+diff --git a/async_simple/util/ThreadPool.h b/async_simple/util/ThreadPool.h
+index 4bd22ca..68560f5 100644
+--- a/async_simple/util/ThreadPool.h
++++ b/async_simple/util/ThreadPool.h
+@@ -61,11 +61,11 @@ public:
+                                         int32_t id = -1);
+     int32_t getCurrentId() const;
+     size_t getItemCount() const;
+-    int32_t getThreadNum() const { return _threadNum; }
++    size_t getThreadNum() const { return _threadNum; }
+ 
+ private:
+     std::pair<size_t, ThreadPool *> *getCurrent() const;
+-    int32_t _threadNum;
++    size_t _threadNum;
+ 
+     std::vector<Queue<WorkItem>> _queues;
+     std::vector<std::thread> _threads;
+@@ -200,7 +200,7 @@ inline std::pair<size_t, ThreadPool *> *ThreadPool::getCurrent() const {
+ inline int32_t ThreadPool::getCurrentId() const {
+     auto current = getCurrent();
+     if (this == current->second) {
+-        return current->first;
++        return (int32_t)current->first;
+     }
+     return -1;
+ }
