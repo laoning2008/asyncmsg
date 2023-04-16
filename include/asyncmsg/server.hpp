@@ -20,7 +20,7 @@ class server {
 
 public:
     server(uint16_t port_)
-    : stopped(false), work_guard(io_context.get_executor()), schedule(io_context), acceptor(io_context, {asio::ip::tcp::v4(), port_}) {
+    : stopped(false), work_guard(io_context.get_executor()), schedule(io_context.get_executor()), acceptor(io_context.get_executor(), {asio::ip::tcp::v4(), port_}) {
         io_thread = std::thread([this]() {
             io_context.run();
         });
@@ -29,13 +29,13 @@ public:
     }
     
     ~server() {
-        stopped = true;
+//        stopped = true;
         
-        auto destrust_task = [this]() -> async_simple::coro::Lazy<void> {
-            asio::error_code ec;
-            acceptor.close(ec);
-        };
-        async_simple::coro::syncAwait(destrust_task().via(&schedule));
+//        auto destrust_task = [this]() -> async_simple::coro::Lazy<void> {
+//            asio::error_code ec;
+//            acceptor.close(ec);
+//        };
+//        async_simple::coro::syncAwait(destrust_task().via(&schedule));
         
         
         io_context.stop();
@@ -70,6 +70,10 @@ private:
             asio::ip::tcp::socket socket(io_context);
 
             auto error = co_await async_accept(acceptor, socket);
+            
+            std::this_thread::sleep_for(std::chrono::seconds(60));
+
+            
             if (stopped) {
                 break;
             }

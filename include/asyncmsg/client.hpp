@@ -19,7 +19,7 @@ class client {
 
 public:
     client(std::string host, const uint16_t port, std::string device_id_)
-    : stopped(false), schedule(io_context), work_guard(io_context.get_executor()), device_id(std::move(device_id_)) {
+    : stopped(false), schedule(io_context.get_executor()), work_guard(io_context.get_executor()), device_id(std::move(device_id_)) {
         io_thread = std::thread([this]() {
             io_context.run();
         });

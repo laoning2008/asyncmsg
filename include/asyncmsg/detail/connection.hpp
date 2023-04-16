@@ -3,14 +3,17 @@
 #include <unordered_map>
 #include <chrono>
 
-#include <async_simple/coro/Collect.h>
-#include <async_simple/coro/Sleep.h>
-#include <async_simple/coro/ConditionVariable.h>
+#include <asio/awaitable.hpp>
 
 #include <asyncmsg/detail/asio_coro_util.hpp>
 #include <asyncmsg/detail/io_buffer.hpp>
 #include <asyncmsg/detail/asio_task_runner.hpp>
 #include <asyncmsg/detail/async_container.hpp>
+
+#include <asyncmsg/async_event.hpp>
+#include <asyncmsg/async_mutex.hpp>
+#include <asyncmsg/async_schedule.hpp>
+#include <asyncmsg/oneshot.hpp>
 
 namespace asyncmsg {
 
@@ -24,14 +27,12 @@ class connection {
     };
     using async_value_map_t = std::unordered_map<uint64_t, request_info>;
 public:
-    connection(asio::io_context& io_context_, asio::ip::tcp::socket socket_, asyncmsg::AsioExecutor& schedule_, std::string device_id_ = {})
-    : io_context(io_context_), socket(std::move(socket_)), device_id(std::move(device_id_)), last_recv_time(std::chrono::steady_clock::now()) {
-        start().via(&schedule_).detach();
+    connection(asio::ip::tcp::socket socket_, std::string device_id_ = {})
+    : socket(std::move(socket_)), device_id(std::move(device_id_)), last_recv_time(std::chrono::steady_clock::now()) {
+        start();
     }
     
     ~connection() {
-        stopped = true;
-        
         asio::error_code ec;
         socket.close(ec);
         
@@ -61,89 +62,70 @@ public:
         co_return co_await received_request_packets.consume();
     }
     
-    async_simple::coro::Lazy<void> connection_disconnected() {
+    asio::awaitable<void> connection_disconnected() {
         co_await connection_disconnected_notifier.wait();
-        connection_disconnected_notifier.reset();
     }
     
     std::string get_device_id() {
         return device_id;
     }
 private:
-    async_simple::coro::Lazy<void> start() {
-        bev::io_buffer recv_buffer(recv_buf_size);
-        for (;;) {            
-            auto result = co_await async_simple::coro::collectAny(receive_packet(recv_buffer), async_simple::coro::sleep(std::chrono::seconds(1)));
+    void start() {
+        co_spawn(socket.get_executor(), periodicly_check(), detached);
+        co_spawn(socket.get_executor(), receive_packet(), detached);
+    }
+    
+    asio::awaitable<void> periodicly_check() {
+        asio::steady_timer timer(socket.get_executor());
+        for (;;) {
+            timer.expires_after(std::chrono::seconds(1));
+            co_await timer.async_wait(asio::use_nothrow_awaitable);
             
-            if (stopped) {
-                std::cout << "stopped" << std::endl;
-                break;
+            for (auto it = rsp_map.begin(); it != rsp_map.end(); ) {
+                auto elapse = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - it->second.begin_time).count();
+                if (elapse > it->second.timeout_seconds) {
+                    it = rsp_map.erase(it);
+                } else {
+                    ++it;
+                }
             }
             
-            if (result.index() == 0) {
-                auto recv_success = std::get<async_simple::Try<bool>>(std::move(result));
-                
-                if (recv_success.hasError()) {
-                    std::cout << "recv error, disconnect" << std::endl;
-                    connection_disconnected_notifier.notify();
-                    break;
-                }
-                
-                if (!recv_success.value()) {
-                    std::cout << "recv error, disconnect" << std::endl;
-                    connection_disconnected_notifier.notify();
-                    break;
-                }
-            } else if (result.index() == 1) {
-//                auto elapse_conn = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - last_recv_time).count();
-//                if (elapse_conn > active_connection_lifetime_seconds) {
-//                    std::cout << "inactive connection, disconnect" << std::endl;
-//                    connection_disconnected_notifier.notify();
-//                    break;
-//                }
-                
-                for (auto it = rsp_map.begin(); it != rsp_map.end(); ) {
-                    auto elapse = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - it->second.begin_time).count();
-                    if (elapse > it->second.timeout_seconds) {
-                        it = rsp_map.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
-            } else {
-                break;
-            }
         }
     }
     
-    async_simple::coro::Lazy<bool> receive_packet(bev::io_buffer& recv_buffer) {
-        auto size_to_read = (recv_buffer.free_size() > 0) ? recv_buffer.free_size() : recv_buffer.capacity();
-        if (size_to_read <= 0) {
-            if (!process_packet(recv_buffer)) {
-                co_return false;
+    asio::awaitable<void> receive_packet(bev::io_buffer& recv_buffer) {
+        bev::io_buffer recv_buffer(recv_buf_size);
+        for (;;) {
+            auto size_to_read = (recv_buffer.free_size() > 0) ? recv_buffer.free_size() : recv_buffer.capacity();
+            if (size_to_read <= 0) {
+                if (!process_packet(recv_buffer)) {
+                    connection_disconnected_notifier.set();
+                    break;
+                }
             }
-        }
-        
-        size_to_read = (recv_buffer.free_size() > 0) ? recv_buffer.free_size() : recv_buffer.capacity();
-        if (size_to_read <= 0) {
-            co_return false;
-        }
+            
+            size_to_read = (recv_buffer.free_size() > 0) ? recv_buffer.free_size() : recv_buffer.capacity();
+            if (size_to_read <= 0) {
+                connection_disconnected_notifier.set();
+                break;
+            }
 
-        auto buf = recv_buffer.prepare(size_to_read);
-        auto [err, read_size] = co_await async_read_some(socket, asio::buffer(buf.data, buf.size));
-        
-        if (stopped || err) {
-            co_return false;
-        }
-        
-        if (read_size > 0) {
-            recv_buffer.commit(read_size);
-            if (!process_packet(recv_buffer)) {
-                co_return false;
+            auto buf = recv_buffer.prepare(size_to_read);
+            auto [err, read_size] = asio::async_read(socket, asio::buffer(buf.data, buf.size));
+            
+            if (err) {
+                on_disconnected.set();
+                break;
+            }
+            
+            if (read_size > 0) {
+                recv_buffer.commit(read_size);
+                if (!process_packet(recv_buffer)) {
+                    on_disconnected.set();
+                    break;
+                }
             }
         }
-        
-        co_return true;
     }
     
     bool process_packet(bev::io_buffer& recv_buffer) {
@@ -191,15 +173,13 @@ private:
     }
     
 private:
-    volatile bool stopped{false};
-    asio::io_context& io_context;
     asio::ip::tcp::socket socket;
     std::chrono::steady_clock::time_point last_recv_time;
     std::string device_id;
     
-    async_simple::coro::Notifier connection_disconnected_notifier;
+    asio::awaitable_ext::async_event on_disconnected;
     async_value_map_t rsp_map;
-    async_request_producer_consumer_simple<std::shared_ptr<packet>> received_request_packets;
+//    async_request_producer_consumer_simple<std::shared_ptr<packet>> received_request_packets;
 };
 
 }
