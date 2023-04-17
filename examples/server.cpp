@@ -8,6 +8,7 @@
 #include <asyncmsg/packet.hpp>
 #include <asyncmsg/ibuffer.hpp>
 #include <asio/experimental/channel.hpp>
+#include <asyncmsg/detail/connection.hpp>
 
 //int main(int argc, char** argv) {
 //    try {

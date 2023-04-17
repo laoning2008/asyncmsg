@@ -45,20 +45,7 @@ public:
     }
     
     async_simple::coro::Lazy<std::shared_ptr<packet>> send_packet(std::shared_ptr<packet> pack, uint32_t timeout_seconds = 3, uint32_t max_tries = 3) {
-        co_return co_await [this, pack, timeout_seconds, max_tries]() -> async_simple::coro::Lazy<std::shared_ptr<packet>> {
-            for (int i = 0; i < max_tries; ++i) {
-                auto rsp = co_await sending_requests[pack->device_id].product_request(std::make_pair(pack, timeout_seconds)).via(&schedule);
-                if (stopped) {
-                    co_return nullptr;
-                }
-                
-                if (rsp) {
-                    co_return rsp;
-                }
-            }
-            
-            co_return nullptr;
-        } ().via(&schedule);
+       
     }
     
     async_simple::coro::Lazy<std::shared_ptr<packet>> await_request(uint32_t cmd) {

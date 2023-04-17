@@ -1,5 +1,5 @@
 #pragma once
-
+#include <functional>
 #include <asio/use_awaitable.hpp>
 
 namespace asio::awaitable_ext {
@@ -7,10 +7,9 @@ namespace asio::awaitable_ext {
 class async_event {
     enum class state { not_set, not_set_consumer_waiting, set };
     mutable std::atomic<state> _state;
-    mutable std::move_only_function<void()> _handler;
-
+    mutable std::function<void()> _handler;
 public:
-    async_event() : _state{State::not_set} {}
+    async_event() : _state{state::not_set} {}
 
     async_event(const async_event&) = delete;
     async_event& operator=(const async_event&) = delete;
