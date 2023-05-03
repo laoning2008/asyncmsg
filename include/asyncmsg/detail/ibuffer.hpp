@@ -7,12 +7,11 @@ namespace asyncmsg {
     public:
         ibuffer(uint8_t* buf = nullptr, uint32_t len = 0, bool copy = false) {
             if (copy) {
-                if (buf_ == nullptr) {
-                    assert(len == 0);
+                if (len == 0) {
                     buf_ = nullptr;
                 } else {
-                    assert(len > 0);
-                    buf_ = new uint8_t[len_];
+                    assert(buf != nullptr);
+                    buf_ = new uint8_t[len];
                     memcpy(buf_, buf, len);
                 }
             } else {
@@ -25,7 +24,7 @@ namespace asyncmsg {
         
         ibuffer(uint32_t len) {
             if (len > 0) {
-                buf_ = new uint8_t[len_];
+                buf_ = new uint8_t[len];
             }
             
             len_ = len;
@@ -33,7 +32,7 @@ namespace asyncmsg {
         }
         
         ~ibuffer() {
-            if (copy_) {
+            if (copy_ && buf_) {
                 delete[] buf_;
             }
         }
@@ -55,14 +54,14 @@ namespace asyncmsg {
         ibuffer& operator=(ibuffer&& other) = delete;
         
         bool empty() const {
-            return len_ > 0;
+            return len_ == 0;
         }
 
-        uint8_t* buf() {
+        uint8_t* buf() const {
             return buf_;
         }
 
-        uint32_t len() {
+        uint32_t len() const {
             return len_;
         }
     private:

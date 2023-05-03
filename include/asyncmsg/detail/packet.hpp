@@ -5,7 +5,7 @@
 
 #include <asyncmsg/detail/crc.hpp>
 #include <asyncmsg/detail/byte_order.hpp>
-#include <asyncmsg/ibuffer.hpp>
+#include <asyncmsg/detail/ibuffer.hpp>
 
 namespace asyncmsg {
 
@@ -49,11 +49,15 @@ public:
         return rsp;
     }
     
+    bool is_valid() {
+        return (cmd != 0) && (seq != 0) && !device_id.empty();
+    }
+    
     const std::string& packet_device_id() const {
         return device_id;
     }
     
-    const ibuffer& packet_body() const {
+    const ibuffer packet_body() const {
         return body;
     }
     
@@ -77,6 +81,8 @@ public:
         if (!body.empty()) {
             memcpy(data_buf.buf() + header_length, body.buf(), body.len());
         }
+        
+        std::cout << "header.crc = " << (int)header.crc << ", crc buf = " << (int)data_buf.buf()[header_length - 1] << std::endl;
         
         return data_buf;
     }
@@ -106,10 +112,12 @@ static std::unique_ptr<packet> parse_packet(uint8_t* buf, size_t buf_len, size_t
         
         packet_header* header = (packet_header*)buf_valid;
         auto crc = asyncmsg::detail::calc_crc8(buf_valid, header_length - 1);
-        if (crc != header->crc) {
-            ++consume_len;
-            continue;
-        }
+        std::cout << "crc cacl = " << (int)crc << ", crc origin = " << (int)header->crc << std::endl;
+//        if (crc != header->crc) {
+//            std::cout << "crc invalid" << std::endl;
+//            ++consume_len;
+//            continue;
+//        }
         
         uint32_t body_len = asyncmsg::detail::network_to_host_32(header->body_len);
         

@@ -15,16 +15,8 @@ target_compile_definitions(asio INTERFACE ASIO_STANDALONE ASIO_NO_DEPRECATED)
 find_package(Threads REQUIRED)
 target_link_libraries(asio INTERFACE Threads::Threads)
 
-CPMAddPackage(
-    NAME async_simple
-    GITHUB_REPOSITORY alibaba/async_simple
-    GIT_TAG 1.0
-    PATCH_COMMAND git checkout . && git apply ${CMAKE_CURRENT_SOURCE_DIR}/patch/async_simple_build_error.patch
-    OPTIONS "ASYNC_SIMPLE_ENABLE_TESTS OFF" "ASYNC_SIMPLE_BUILD_DEMO_EXAMPLE OFF")
-
 add_library(asyncmsg INTERFACE)
 target_link_libraries(asyncmsg INTERFACE asio)
-target_link_libraries(asyncmsg INTERFACE async_simple_static)
 target_include_directories(asyncmsg INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 option(ASYNC_MSG_ENABLE_EXAMPLES "Build the exmples" ON)

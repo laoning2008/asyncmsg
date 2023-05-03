@@ -5,128 +5,135 @@
 #include <chrono>
 #include <future>
 
-#include <asyncmsg/detail/asio_coro_util.hpp>
-#include <async_simple/coro/Collect.h>
-#include <async_simple/coro/Sleep.h>
+#include <asio/ip/tcp.hpp>
+#include <asio/detached.hpp>
+#include <asio/connect.hpp>
 
 #include <asyncmsg/detail/connection.hpp>
-#include <asyncmsg/detail/async_container.hpp>
 
 namespace asyncmsg {
 
 class client {
+    using received_request_channel_map = std::unordered_map<uint32_t, std::unique_ptr<connection::packet_channel>>;
     constexpr static uint32_t heartbeat_interval_seconds = 20;
+    constexpr static uint32_t reconnect_interval_seconds = 5;
 
 public:
     client(std::string host, const uint16_t port, std::string device_id_)
-    : stopped(false), schedule(io_context.get_executor()), work_guard(io_context.get_executor()), device_id(std::move(device_id_)) {
+    : work_guard(io_context.get_executor()), device_id(std::move(device_id_))
+    , server_host(host), server_port(port) {
         io_thread = std::thread([this]() {
             io_context.run();
         });
 
-        start(host, port).via(&schedule).detach();
+        asio::co_spawn(io_context, start(), asio::detached);
     }
 
     ~client() {
-        stopped = true;
-
-        auto destrust_task = [this]() -> async_simple::coro::Lazy<void> {
+        auto task = [this]() -> asio::awaitable<void> {
+            if (conn) {
+                co_await conn->stop();
+            }
             conn = nullptr;
+            io_context.stop();
         };
-        async_simple::coro::syncAwait(destrust_task().via(&schedule));
-
-
-        io_context.stop();
+        
+        asio::co_spawn(io_context.get_executor(), task, asio::detached);
+        
         if (io_thread.joinable()) {
             io_thread.join();
         }
     }
-
-    async_simple::coro::Lazy<std::shared_ptr<packet>> send_packet(std::shared_ptr<packet> pack, uint32_t try_timeout_seconds = 3, uint32_t max_tries = 3) {
-        co_return co_await [this, pack, try_timeout_seconds, max_tries]() -> async_simple::coro::Lazy<std::shared_ptr<packet>> {
-            if (conn == nullptr) {
-                co_return nullptr;
-            }
-
-            for (int i = 0; i < max_tries; ++i) {
-                auto responser = std::make_shared<async_value<std::shared_ptr<packet>>>();
-                co_await conn->send_packet(pack, try_timeout_seconds, responser);
-                
-                auto rsp =  co_await responser->recv();
-                
-                if (stopped) {
-                    co_return nullptr;
-                }
-                
-                if (rsp) {
-                    co_return rsp;
-                }
-            }
-            
-            co_return nullptr;
-        } ().via(&schedule);
+    
+    asio::awaitable<void> send_packet(packet pack) {
+        co_await schedule(io_context.get_executor());
+        if (!conn) {
+            std::cout << "connect--send_packet" << std::endl;
+        }
+        
+        co_return co_await conn->send_packet(pack);
     }
 
-    async_simple::coro::Lazy<std::shared_ptr<packet>> await_request(uint32_t cmd) {
-        co_return co_await received_request_packets.consume(cmd).via(&schedule);
-    }
-private:
-    async_simple::coro::Lazy<void> start(const std::string& host, const uint16_t port) {
-        for (;;) {
-            if (stopped) {
-                break;
-            }
-            
-            asio::ip::tcp::socket socket(io_context);
-            auto ec = co_await async_connect(io_context, socket, host, std::to_string(port));
-            
-            if (stopped) {
-                break;
-            }
-            
-            if (ec) {
-                co_await async_simple::coro::sleep(std::chrono::seconds(1));
+    asio::awaitable<packet> send_packet(packet pack, uint32_t try_timeout_seconds, uint32_t max_tries) {
+        co_await schedule(io_context.get_executor());
+        asio::steady_timer timer(io_context.get_executor());
+
+        for (auto i = 0; i < max_tries; ++i) {
+            if (!conn) {
+                std::cout << "connect--send_packet2" << std::endl;
+                timer.expires_after(std::chrono::seconds(try_timeout_seconds));
+                co_await timer.async_wait(asio::use_awaitable);
                 continue;
             }
-
-            conn = std::make_unique<connection>(io_context, std::move(socket), schedule, device_id);
-            std::chrono::steady_clock::time_point last_heartbeat_timepoit;
             
-            for (;;) {
-                auto result = co_await async_simple::coro::collectAny(conn->connection_disconnected(), conn->request_received(), async_simple::coro::sleep(std::chrono::seconds(2)));
+            std::cout << get_time_string() << ", send_packet, tries = " << i << std::endl;
+            auto rsp_pack = co_await conn->send_packet(pack, try_timeout_seconds);
+            std::cout << get_time_string() << ", send_packet, result = " << rsp_pack.is_valid() << std::endl;
+            
+            if (rsp_pack.is_valid()) {
+                co_return rsp_pack;
+            }
+        }
+        
+        co_return packet{};
+    }
 
-                if (stopped) {
-                    break;
-                }
+    asio::awaitable<packet> await_request(uint32_t cmd) {
+        co_await schedule(io_context.get_executor());
+        
+        auto it = received_request_channels.find(cmd);
+        if (it == received_request_channels.end()) {
+            received_request_channels[cmd] = std::make_unique<connection::packet_channel>(io_context, connection::received_packet_channel_size);
+        }
+        
+        co_return co_await received_request_channels[cmd]->async_receive(asio::use_awaitable);
+    }
+private:
+    asio::awaitable<void> start() {
+        for (;;) {
+            std::cout << "connect--start" << std::endl;
+            
+            asio::steady_timer timer(io_context.get_executor());
+            timer.expires_after(std::chrono::seconds(reconnect_interval_seconds));
+            co_await(connect() || timer.async_wait(asio::use_awaitable));
+            if (!conn) {
+                continue;
+            }
+            
+            std::chrono::steady_clock::time_point last_heartbeat_timepoit;
+
+            for (;;) {
+                auto result = co_await(conn->request_received() || conn->connection_disconnected());
+
+                std::cout << "event index = " << result.index() << std::endl;
                 
                 if (result.index() == 0) {
-                    break;
-                } else if (result.index() == 1) {
-                    auto recv_packet_result = std::get<async_simple::Try<std::shared_ptr<packet>>>(std::move(result));
-                    if (recv_packet_result.hasError() || !recv_packet_result.value()) {
-                        break;
-                    }
-                    received_request_packets.product(recv_packet_result.value());
-                } else if (result.index() == 2) {
-                    auto now = std::chrono::steady_clock::now();
-                    auto elapse = std::chrono::duration_cast<std::chrono::seconds>(now - last_heartbeat_timepoit).count();
-                    if (elapse > heartbeat_interval_seconds) {
-                        last_heartbeat_timepoit = now;
-                        heartbeat();
+                    packet pack(std::get<0>(std::move(result)));
+                    auto it = received_request_channels.find(pack.packet_cmd());
+                    if (it != received_request_channels.end()) {
+                        co_await it->second->async_send(asio::error_code{}, pack, asio::use_awaitable);
                     }
                 } else {
+                    if (conn) {
+                        co_await conn->stop();
+                    }
+                    conn = nullptr;
                     break;
                 }
             }
         }
     }
     
-    void heartbeat() {
-        if (!conn) {
-            return;
-        }
-//        auto pack = packet::build_packet(0, false, device_id, nullptr, 0);
-//        send_packet(pack).via(&schedule).detach();
+    asio::awaitable<void> connect() {
+        asio::ip::tcp::resolver resolver(io_context);
+        auto endpoints = resolver.resolve(server_host, std::to_string(server_port));
+        asio::ip::tcp::socket socket(io_context);
+        
+        std::cout << "async_connect begin" << std::endl;
+        co_await asio::async_connect(socket, endpoints, asio::use_awaitable);
+        std::cout << "async_connect end" << std::endl;
+        
+        conn = std::make_unique<connection>(std::move(socket), device_id);
     }
 private:
     volatile bool stopped{false};
@@ -134,12 +141,12 @@ private:
     asio::io_context io_context;
     std::thread io_thread;
     asio::executor_work_guard<asio::io_context::executor_type> work_guard;
-    asyncmsg::AsioExecutor schedule;
     std::string device_id;
+    std::string server_host;
+    uint16_t server_port;
 
     std::unique_ptr<connection> conn;
-
-    packet_producer_consumer_by_cmd received_request_packets;
+    received_request_channel_map received_request_channels;
 };
 
 }

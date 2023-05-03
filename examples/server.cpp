@@ -2,100 +2,64 @@
 #include <thread>
 #include <asio/io_context.hpp>
 #include <asio/signal_set.hpp>
-#include <asyncmsg/oneshot.hpp>
 #include <asio.hpp>
 #include <iostream>
-#include <asyncmsg/packet.hpp>
-#include <asyncmsg/ibuffer.hpp>
-#include <asio/experimental/channel.hpp>
-#include <asyncmsg/detail/connection.hpp>
+#include <asyncmsg/server.hpp>
+#include <locale>
+#include <iomanip>
+#include <ctime>
+#include <sstream>
 
-//int main(int argc, char** argv) {
-//    try {
-//        asio::io_context io_context(std::thread::hardware_concurrency());
-//        asio::signal_set signals(io_context, SIGINT, SIGTERM);
-//
-////        auto srv = std::make_shared<asyncmsg::server>(5555);
-//
-//        signals.async_wait([&](auto, auto) {
-////            srv = nullptr;
-//            io_context.stop();
-//        });
-//
-//
-////        auto task = [&srv]() -> async_simple::coro::Lazy<void> {
-////            for (;;) {
-//////                auto pack_recv = co_await srv->await_request(1);
-//////                if (pack_recv) {
-//////                    std::cout << "recv req, cmd = " << pack_recv->cmd << ", seq = " << pack_recv->seq << std::endl;
-//////                } else {
-//////                    std::cout << "recv req = null" << std::endl;
-//////                }
-//////
-//////                pack_recv->rsp = true;
-//////                co_await srv->send_packet(pack_recv);
-////                std::this_thread::sleep_for(std::chrono::seconds(10));
-////                srv.reset();
-////                co_return;
-////            }
-////        };
-////        std::thread t([task]() {
-////            async_simple::coro::syncAwait(task());
-////        });
-//
-//        io_context.run();
-//    }
-//    catch (std::exception& e) {
-//      std::printf("Exception: %s\n", e.what());
-//    }
-//
-//    return 0;
-//}
-
-
-using packet_channel = asio::experimental::channel<void(asio::error_code, asyncmsg::packet&&)>;
-
-
-//asio::awaitable<void> sender_task(oneshot::sender<std::shared_ptr<asyncmsg::packet>> s)
-//{
-//    auto pack = asyncmsg::packet::build_packet(1, false, "test_device_id", nullptr, 0);
-//    s.send(pack);
-//    co_return;
-//}
-//
-//asio::awaitable<void> receiver_task(oneshot::receiver<std::shared_ptr<asyncmsg::packet>> r)
-//{
-//    co_await r.async_wait(asio::deferred);
-//    std::cout << "The result:" << r.get()->device_id << std::endl;
-//}
-
-asio::awaitable<void> sender_task(packet_channel& c)
-{
-    auto pack = asyncmsg::packet{1, false, "test_device_id"};
-//    std::cout << "address = " << reinterpret_cast<uint64_t>(&pack.device_id.data()[0]) << std::endl;
-
-    co_await c.async_send(asio::error_code{}, std::move(pack), asio::use_awaitable);
+std::string get_time_string() {
+    auto now = std::chrono::system_clock::now();
+    //通过不同精度获取相差的毫秒数
+    uint64_t dis_millseconds = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count()
+        - std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count() * 1000;
+    time_t tt = std::chrono::system_clock::to_time_t(now);
+    auto time_tm = localtime(&tt);
+    char strTime[25] = { 0 };
+    sprintf(strTime, "%d-%02d-%02d %02d:%02d:%02d %03d", time_tm->tm_year + 1900,
+        time_tm->tm_mon + 1, time_tm->tm_mday, time_tm->tm_hour,
+        time_tm->tm_min, time_tm->tm_sec, (int)dis_millseconds);
+    return strTime;
 }
 
-asio::awaitable<void> receiver_task(packet_channel& c)
-{
-    auto&& pack = co_await c.async_receive(asio::use_awaitable);
-    std::cout << "The result:" << pack.packet_device_id() << std::endl;
+int main(int argc, char** argv) {
+    try {
+        asio::io_context io_context(std::thread::hardware_concurrency());
+        asio::signal_set signals(io_context, SIGINT, SIGTERM);
+
+        auto srv = std::make_shared<asyncmsg::server>(5555);
+
+        signals.async_wait([&](auto, auto) {
+            srv = nullptr;
+            io_context.stop();
+        });
+
+
+        auto task = [srv]() -> asio::awaitable<void> {
+            for (;;) {
+//                std::cout << "wait req" << std::endl;
+                auto req_pack = co_await srv->await_request(1);
+                
+
+                std::cout << get_time_string() << ", recv req" << ", data = " << (char*)(req_pack.packet_body().buf()) << std::endl;
+                
+                uint8_t data[] = {'w', 'o', 'r', 'l', 'd', '\0'};
+                auto rsp_pack = asyncmsg::packet(req_pack.packet_cmd(), true, req_pack.packet_device_id(), req_pack.packet_seq(), data, sizeof(data));
+                co_await srv->send_packet(rsp_pack);
+                std::cout << get_time_string() << ", send rsp" << ", data = " << (char*)data << std::endl;
+            }
+        };
+        
+        asio::co_spawn(io_context.get_executor(), task(), asio::detached);
+
+        io_context.run();
+    }
+    catch (std::exception& e) {
+      std::printf("Exception: %s\n", e.what());
+    }
+
+    return 0;
 }
 
-int main()
-{
-    auto ctx = asio::io_context{};
-
-//    auto [s, r] = oneshot::create<std::shared_ptr<asyncmsg::packet>>();
-//
-//    asio::co_spawn(ctx, sender_task(std::move(s)), asio::detached);
-//    asio::co_spawn(ctx, receiver_task(std::move(r)), asio::detached);
-
-
-    packet_channel c(ctx, 1);
-    asio::co_spawn(ctx, sender_task(c), asio::detached);
-    asio::co_spawn(ctx, receiver_task(c), asio::detached);
-    
-    ctx.run();
-}

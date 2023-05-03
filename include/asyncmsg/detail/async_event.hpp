@@ -1,13 +1,14 @@
 #pragma once
 #include <functional>
 #include <asio/use_awaitable.hpp>
+#include "asyncmsg/detail/function2.hpp"
 
 namespace asio::awaitable_ext {
 
 class async_event {
     enum class state { not_set, not_set_consumer_waiting, set };
     mutable std::atomic<state> _state;
-    mutable std::function<void()> _handler;
+    mutable fu2::unique_function<void()> _handler;
 public:
     async_event() : _state{state::not_set} {}
 
