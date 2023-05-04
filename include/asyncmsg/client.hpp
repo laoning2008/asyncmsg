@@ -25,7 +25,6 @@ public:
         io_thread = std::thread([this]() {
             io_context.run();
         });
-
         asio::co_spawn(io_context, start(), asio::detached);
     }
 

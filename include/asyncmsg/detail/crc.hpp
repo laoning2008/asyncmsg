@@ -24,11 +24,12 @@ namespace detail {
     };
 
     uint8_t calc_crc8(const uint8_t* data, uint32_t len) {
-        static uint8_t val = 0x77;
+        uint8_t val = 0x77;
         for (auto i = 0; i < len; i++) {
             val = val ^ data[i];
             val = crc8_table[val];
         }
+        
         return val;
     }
 

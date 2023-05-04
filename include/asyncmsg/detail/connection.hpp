@@ -80,17 +80,17 @@ public:
     }
     
     asio::awaitable<void> stop() {
-        std::cout << get_time_string() << "stop connection begin" << std::endl;
+        std::cout << get_time_string() << ", stop connection begin" << std::endl;
         stopped = true;
         close();
         
         asio::steady_timer wait_timer(co_await asio::this_coro::executor);
         while (processing || !requests.empty()) {
-            std::cout << get_time_string() << "stop connection running = " << processing << ", requests.size =" << requests.size() << std::endl;
+            std::cout << get_time_string() << ", stop connection running = " << processing << ", requests.size =" << requests.size() << std::endl;
             wait_timer.expires_after(std::chrono::milliseconds(500));
             co_await wait_timer.async_wait(asio::use_awaitable);
         }
-        std::cout << get_time_string() << "stop connection end" << std::endl;
+        std::cout << get_time_string() << ", stop connection end" << std::endl;
     }
     
     asio::awaitable<void> send_packet(packet pack) {
@@ -118,17 +118,17 @@ public:
         auto [s, r] = oneshot::create<packet>();
         auto id = pack.packet_cmd() << 31 | pack.packet_seq();
         requests.emplace(id, std::move(s));
-        std::cout << get_time_string() << "start send packet, crc = " << (int)pack_buf.buf()[header_length-1] << std::endl;
+        std::cout << get_time_string() << ", start send packet, crc = " << (int)pack_buf.buf()[header_length-1] << std::endl;
 
         try {
             auto nwrite = co_await asio::async_write(socket, buf, asio::use_awaitable);
-            std::cout << get_time_string() << "async_write, nwrite = " << nwrite << std::endl;
+            std::cout << get_time_string() << ", async_write, nwrite = " << nwrite << std::endl;
 
             send_timer.expires_after(std::chrono::seconds(timeout_seconds));
             auto result = co_await(send_timer.async_wait(asio::use_awaitable) || r.async_wait(asio::use_awaitable));
             requests.erase(id);
             
-            std::cout << get_time_string() << "send packet result = " << result.index() << std::endl;
+            std::cout << get_time_string() << ", send packet result = " << result.index() << std::endl;
             if (result.index() == 0) {
                 co_return packet{};
             } else {
@@ -138,7 +138,7 @@ public:
             std::cout << e.what() << std::endl;
             requests.erase(id);
             close(true);
-            std::cout << get_time_string() << "recturn empty packt after exception" << std::endl;
+            std::cout << get_time_string() << ", recturn empty packt after exception" << std::endl;
             co_return packet{};
         }
     }
@@ -228,7 +228,7 @@ private:
             }
             
             if (pack->packet_device_id().empty()) {
-                std::cout << get_time_string() << "recv pack, device id is empty" << std::endl;
+                std::cout << get_time_string() << ", recv pack, device id is empty" << std::endl;
 
                 continue;// ignore it
             }
