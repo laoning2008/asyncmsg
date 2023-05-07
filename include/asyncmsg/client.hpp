@@ -15,8 +15,7 @@ namespace asyncmsg {
 
 class client {
     using received_request_channel_map = std::unordered_map<uint32_t, std::unique_ptr<connection::packet_channel>>;
-    constexpr static uint32_t heartbeat_interval_seconds = 20;
-    constexpr static uint32_t reconnect_interval_seconds = 5;
+    constexpr static uint32_t reconnect_interval_seconds = 3;
 
 public:
     client(std::string host, const uint16_t port, std::string device_id_)
@@ -55,19 +54,19 @@ public:
 
     asio::awaitable<packet> send_packet(packet pack, uint32_t try_timeout_seconds, uint32_t max_tries) {
         co_await schedule(io_context.get_executor());
-        asio::steady_timer timer(io_context.get_executor());
 
         for (auto i = 0; i < max_tries; ++i) {
             if (!conn) {
-                std::cout << "connect--send_packet2" << std::endl;
+                std::cout << "connect--conn==nullptr" << std::endl;
+                asio::steady_timer timer(io_context.get_executor());
                 timer.expires_after(std::chrono::seconds(try_timeout_seconds));
                 co_await timer.async_wait(asio::use_awaitable);
                 continue;
             }
             
-            std::cout << get_time_string() << ", send_packet, tries = " << i << std::endl;
+//            std::cout << get_time_string() << ", send_packet, tries = " << i << std::endl;
             auto rsp_pack = co_await conn->send_packet(pack, try_timeout_seconds);
-            std::cout << get_time_string() << ", send_packet, result = " << rsp_pack.is_valid() << std::endl;
+//            std::cout << get_time_string() << ", send_packet, result = " << rsp_pack.is_valid() << std::endl;
             
             if (rsp_pack.is_valid()) {
                 co_return rsp_pack;
@@ -94,31 +93,37 @@ private:
             
             asio::steady_timer timer(io_context.get_executor());
             timer.expires_after(std::chrono::seconds(reconnect_interval_seconds));
-            co_await(connect() || timer.async_wait(asio::use_awaitable));
-            if (!conn) {
-                continue;
-            }
+            co_await timer.async_wait(asio::use_awaitable);
             
-            std::chrono::steady_clock::time_point last_heartbeat_timepoit;
+            try {
+                co_await connect();
 
-            for (;;) {
-                auto result = co_await(conn->request_received() || conn->connection_disconnected());
-
-                std::cout << "event index = " << result.index() << std::endl;
-                
-                if (result.index() == 0) {
-                    packet pack(std::get<0>(std::move(result)));
-                    auto it = received_request_channels.find(pack.packet_cmd());
-                    if (it != received_request_channels.end()) {
-                        co_await it->second->async_send(asio::error_code{}, pack, asio::use_awaitable);
-                    }
-                } else {
-                    if (conn) {
-                        co_await conn->stop();
-                    }
-                    conn = nullptr;
-                    break;
+                std::cout << "connect--end" << std::endl;
+                if (!conn) {
+                    std::cout << "conn == nullptr" << std::endl;
+                    continue;
+                    continue;
                 }
+                
+                for (;;) {
+                    auto result = co_await(conn->request_received() || conn->connection_disconnected());
+
+//                    std::cout << "event index = " << result.index() << std::endl;
+                    
+                    if (result.index() == 0) {
+                        packet pack(std::get<0>(std::move(result)));
+                        auto it = received_request_channels.find(pack.packet_cmd());
+                        if (it != received_request_channels.end()) {
+                            co_await it->second->async_send(asio::error_code{}, pack, asio::use_awaitable);
+                        }
+                    } else {
+                        co_await conn->stop();
+                        conn = nullptr;
+                        break;
+                    }
+                }
+            } catch(const std::exception& e) {
+                std::cout << "client start exception :" << e.what() << std::endl;
             }
         }
     }

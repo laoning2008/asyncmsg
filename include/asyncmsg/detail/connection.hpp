@@ -1,4 +1,9 @@
 #pragma once
+#include <asio/experimental/cancellation_condition.hpp>
+#define wait_for_one_success wait_for_one
+#include <asio/experimental/awaitable_operators.hpp>
+#undef wait_for_on_success
+
 #include <exception>
 #include <unordered_map>
 #include <chrono>
@@ -37,7 +42,7 @@ std::string get_time_string() {
 
 class connection {
     constexpr static uint32_t recv_buf_size = 128*1024;
-    constexpr static uint32_t active_connection_lifetime_seconds = 60;
+    constexpr static uint32_t active_connection_lifetime_seconds = 30;
     constexpr static uint32_t active_connection_lifetime_check_interval_seconds = 1;
 
     using request_map_t = std::unordered_map<uint64_t, oneshot::sender<asyncmsg::packet>>;
@@ -60,23 +65,6 @@ public:
     
     ~connection() {
         std::cout << "~connection" << std::endl;
-    }
-
-    void start() {
-        auto task = [this]() -> asio::awaitable<void> {
-            processing = true;
-            
-            try {
-                co_await(check() || receive_packet());
-            } catch (std::exception& e) {
-                std::cout << "connection start exception: " << e.what() << std::endl;
-            }
-            
-            std::cout << "set running = false" << std::endl;
-            processing = false;
-        };
-        
-        co_spawn(socket.get_executor(), task, asio::detached);
     }
     
     asio::awaitable<void> stop() {
@@ -104,7 +92,7 @@ public:
             co_await asio::async_write(socket, buf, asio::use_awaitable);
         } catch(std::exception& e) {
             std::cout << e.what() << std::endl;
-            close(true);
+            close();
         }
     }
     
@@ -118,17 +106,16 @@ public:
         auto [s, r] = oneshot::create<packet>();
         auto id = pack.packet_cmd() << 31 | pack.packet_seq();
         requests.emplace(id, std::move(s));
-        std::cout << get_time_string() << ", start send packet, crc = " << (int)pack_buf.buf()[header_length-1] << std::endl;
 
         try {
             auto nwrite = co_await asio::async_write(socket, buf, asio::use_awaitable);
-            std::cout << get_time_string() << ", async_write, nwrite = " << nwrite << std::endl;
+//            std::cout << get_time_string() << ", async_write, nwrite = " << nwrite << std::endl;
 
             send_timer.expires_after(std::chrono::seconds(timeout_seconds));
             auto result = co_await(send_timer.async_wait(asio::use_awaitable) || r.async_wait(asio::use_awaitable));
             requests.erase(id);
             
-            std::cout << get_time_string() << ", send packet result = " << result.index() << std::endl;
+//            std::cout << get_time_string() << ", send packet result = " << result.index() << std::endl;
             if (result.index() == 0) {
                 co_return packet{};
             } else {
@@ -137,8 +124,8 @@ public:
         } catch(std::exception& e) {
             std::cout << e.what() << std::endl;
             requests.erase(id);
-            close(true);
-            std::cout << get_time_string() << ", recturn empty packt after exception" << std::endl;
+            close();
+            std::cout << get_time_string() << ", return empty packt after exception" << std::endl;
             co_return packet{};
         }
     }
@@ -155,21 +142,40 @@ public:
         return device_id;
     }
 private:
-    void close(bool notify = false) {
-        send_timer.cancel();
-        check_timer.cancel();
-        asio::error_code ec;
-        socket.close(ec);
-        if (notify) {
-            std::cout << "on_disconnected.set" << std::endl;
+    void start() {
+        auto task = [this]() -> asio::awaitable<void> {
+            processing = true;
+            
             try {
-                on_disconnected.first.send();
+                co_await(check() || receive_packet());
             } catch (std::exception& e) {
-                std::cout << "on_disconnected.set exception = " <<e.what() << std::endl;
+                std::cout << "connection start exception: " << e.what() << std::endl;
             }
-        }
+            
+            std::cout << "set running = false" << std::endl;
+            processing = false;
+        };
         
-        std::cout << "close end" << std::endl;
+        co_spawn(socket.get_executor(), task, asio::detached);
+    }
+    
+    void close() {
+        if (!stopped) {
+            stopped = true;
+            std::cout << get_time_string() << ", send_timer canceled" << std::endl;
+            send_timer.cancel();
+            check_timer.cancel();
+            received_request_channel.cancel();
+            
+            asio::error_code ec;
+            socket.close(ec);
+            
+            on_disconnected.first.send();
+            
+            requests.clear();
+            
+            std::cout << "close end" << std::endl;
+        }
     }
     
     asio::awaitable<void> check() {
@@ -179,7 +185,7 @@ private:
             
             auto now = std::chrono::steady_clock::now();
             if (std::chrono::duration_cast<std::chrono::seconds>(now - last_recv_time).count() > active_connection_lifetime_seconds) {
-                close(true);
+                close();
                 break;
             }
         }
@@ -191,14 +197,14 @@ private:
             auto size_to_read = (recv_buffer.free_size() > 0) ? recv_buffer.free_size() : recv_buffer.capacity();
             if (size_to_read <= 0) {
                 if (! co_await process_packet(recv_buffer)) {
-                    close(true);
+                    close();
                     break;
                 }
             }
             
             size_to_read = (recv_buffer.free_size() > 0) ? recv_buffer.free_size() : recv_buffer.capacity();
             if (size_to_read <= 0) {
-                close(true);
+                close();
                 break;
             }
 
@@ -208,7 +214,7 @@ private:
             if (read_size > 0) {
                 recv_buffer.commit(read_size);
                 if (! co_await process_packet(recv_buffer)) {
-                    close(true);
+                    close();
                     break;
                 }
             }

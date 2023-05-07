@@ -71,27 +71,36 @@ public:
 private:
     asio::awaitable<packet> start() {
         for (;;) {
-            auto socket = co_await acceptor.async_accept(asio::use_awaitable);
-            asio::co_spawn(io_context, handle_connection(std::move(socket)), asio::detached);
+            try {
+                auto socket = co_await acceptor.async_accept(asio::use_awaitable);
+                asio::co_spawn(io_context, handle_connection(std::move(socket)), asio::detached);
+            } catch(const std::exception& e) {
+                std::cout << "server start exception: " << e.what() << std::endl;
+            }
         }
     }
     
     asio::awaitable<void> handle_connection(asio::ip::tcp::socket socket) {
         connections.push_back(std::make_unique<connection>(std::move(socket)));
         auto& conn = connections.back();
-        for (;;) {
-            auto result = co_await(conn->request_received() || conn->connection_disconnected());
-            
-            if (result.index() == 0) {
-                packet pack(std::get<0>(std::move(result)));
-                auto it = received_request_channels.find(pack.packet_cmd());
-                if (it != received_request_channels.end()) {
-                    co_await it->second->async_send(asio::error_code{}, pack, asio::use_awaitable);
+        
+        try {
+            for (;;) {
+                auto result = co_await(conn->request_received() || conn->connection_disconnected());
+                
+                if (result.index() == 0) {
+                    packet pack(std::get<0>(std::move(result)));
+                    auto it = received_request_channels.find(pack.packet_cmd());
+                    if (it != received_request_channels.end()) {
+                        co_await it->second->async_send(asio::error_code{}, pack, asio::use_awaitable);
+                    }
+                } else {
+                    std::cout << "connection_disconnected" << std::endl;
+                    break;
                 }
-            } else {
-                std::cout << "connection_disconnected" << std::endl;
-                break;
             }
+        } catch(const std::exception& e) {
+            std::cout << "handle_connection exception: " << e.what() << std::endl;
         }
         
         co_await conn->stop();
