@@ -45,28 +45,31 @@ public:
     
     asio::awaitable<void> send_packet(packet pack) {
         co_await schedule(io_context.get_executor());
+        
         if (!conn) {
-            std::cout << "connect--send_packet" << std::endl;
+            std::cout << "send_packet--conn==nullptr" << std::endl;
+            co_return;
         }
         
         co_return co_await conn->send_packet(pack);
     }
 
-    asio::awaitable<packet> send_packet(packet pack, uint32_t try_timeout_seconds, uint32_t max_tries) {
+    asio::awaitable<packet> send_packet(packet pack, uint32_t timeout_seconds, uint32_t max_tries) {
         co_await schedule(io_context.get_executor());
+    
 
         for (auto i = 0; i < max_tries; ++i) {
             if (!conn) {
-                std::cout << "connect--conn==nullptr" << std::endl;
-                asio::steady_timer timer(io_context.get_executor());
-                timer.expires_after(std::chrono::seconds(try_timeout_seconds));
-                co_await timer.async_wait(asio::use_awaitable);
+                std::cout << "send_packet--conn==nullptr" << std::endl;
+                asio::steady_timer timer(io_context.get_executor(), std::chrono::seconds(timeout_seconds));
+                co_await timer.async_wait(use_nothrow_awaitable);
+                
+                std::cout << "connect, io_thread_id = " << io_thread.get_id() << ", this thead id=" << std::this_thread::get_id() << std::endl;
+
                 continue;
             }
             
-//            std::cout << get_time_string() << ", send_packet, tries = " << i << std::endl;
-            auto rsp_pack = co_await conn->send_packet(pack, try_timeout_seconds);
-//            std::cout << get_time_string() << ", send_packet, result = " << rsp_pack.is_valid() << std::endl;
+            auto rsp_pack = co_await conn->send_packet(pack, timeout_seconds);
             
             if (rsp_pack.is_valid()) {
                 co_return rsp_pack;
@@ -84,60 +87,57 @@ public:
             received_request_channels[cmd] = std::make_unique<connection::packet_channel>(io_context, connection::received_packet_channel_size);
         }
         
-        co_return co_await received_request_channels[cmd]->async_receive(asio::use_awaitable);
+        auto [e, pack] = co_await received_request_channels[cmd]->async_receive(use_nothrow_awaitable);
+        co_return e ? packet{} : pack;
     }
 private:
     asio::awaitable<void> start() {
         for (;;) {
             std::cout << "connect--start" << std::endl;
+            co_await connect();
+            std::cout << "connect--end" << std::endl;
             
-            asio::steady_timer timer(io_context.get_executor());
-            timer.expires_after(std::chrono::seconds(reconnect_interval_seconds));
-            co_await timer.async_wait(asio::use_awaitable);
-            
-            try {
-                co_await connect();
-
-                std::cout << "connect--end" << std::endl;
-                if (!conn) {
-                    std::cout << "conn == nullptr" << std::endl;
-                    continue;
-                    continue;
-                }
-                
-                for (;;) {
-                    auto result = co_await(conn->request_received() || conn->connection_disconnected());
-
-//                    std::cout << "event index = " << result.index() << std::endl;
-                    
-                    if (result.index() == 0) {
-                        packet pack(std::get<0>(std::move(result)));
-                        auto it = received_request_channels.find(pack.packet_cmd());
-                        if (it != received_request_channels.end()) {
-                            co_await it->second->async_send(asio::error_code{}, pack, asio::use_awaitable);
-                        }
-                    } else {
-                        co_await conn->stop();
-                        conn = nullptr;
-                        break;
-                    }
-                }
-            } catch(const std::exception& e) {
-                std::cout << "client start exception :" << e.what() << std::endl;
+            if (!conn) {
+                std::cout << "conn == nullptr" << std::endl;
+                asio::steady_timer timer(io_context.get_executor(), std::chrono::seconds(reconnect_interval_seconds));
+                co_await timer.async_wait(use_nothrow_awaitable);
+                continue;
             }
+            
+            for (;;) {
+                auto result = co_await(conn->request_received() || conn->connection_disconnected());
+                
+                if (result.index() == 0) {
+                    packet pack(std::get<0>(std::move(result)));
+                    auto it = received_request_channels.find(pack.packet_cmd());
+                    if (it != received_request_channels.end()) {
+                        co_await it->second->async_send(asio::error_code{}, pack, use_nothrow_awaitable);
+                    }
+                } else {
+                    co_await conn->stop();
+                    conn = nullptr;
+                    break;
+                }
+            }
+
         }
     }
     
     asio::awaitable<void> connect() {
         asio::ip::tcp::resolver resolver(io_context);
-        auto endpoints = resolver.resolve(server_host, std::to_string(server_port));
+        auto [e_resolver, endpoints] = co_await resolver.async_resolve(server_host, std::to_string(server_port), use_nothrow_awaitable);
+        if (e_resolver) {
+            co_return;
+        }
+
         asio::ip::tcp::socket socket(io_context);
         
         std::cout << "async_connect begin" << std::endl;
-        co_await asio::async_connect(socket, endpoints, asio::use_awaitable);
-        std::cout << "async_connect end" << std::endl;
-        
-        conn = std::make_unique<connection>(std::move(socket), device_id);
+        auto [e_connect, endpoint] = co_await asio::async_connect(socket, endpoints, use_nothrow_awaitable);
+        std::cout << "async_connect end, e = " << e_connect.message() << std::endl;
+        if (!e_connect) {
+            conn = std::make_unique<connection>(std::move(socket), device_id);
+        }
     }
 private:
     volatile bool stopped{false};

@@ -25,41 +25,34 @@ std::string get_time_string() {
 }
 
 int main(int argc, char** argv) {
-    try {
-        asio::io_context io_context(std::thread::hardware_concurrency());
-        asio::signal_set signals(io_context, SIGINT, SIGTERM);
+    asio::io_context io_context(std::thread::hardware_concurrency());
+    asio::signal_set signals(io_context, SIGINT, SIGTERM);
 
-        auto srv = std::make_shared<asyncmsg::server>(5555);
+    auto srv = std::make_shared<asyncmsg::server>(5555);
 
-        signals.async_wait([&](auto, auto) {
-            srv = nullptr;
-            io_context.stop();
-        });
+    signals.async_wait([&](auto, auto) {
+        srv = nullptr;
+        io_context.stop();
+    });
 
 
-        auto task = [srv]() -> asio::awaitable<void> {
-            for (;;) {
-//                std::cout << "wait req" << std::endl;
-                auto req_pack = co_await srv->await_request(1);
-                
+    auto task = [srv]() -> asio::awaitable<void> {
+        for (;;) {
+            auto req_pack = co_await srv->await_request(1);
+            
+            std::cout << get_time_string() << ", recv req" << ", data = " << (char*)(req_pack.packet_body().buf()) << std::endl;
+            
+            uint8_t data[] = {'w', 'o', 'r', 'l', 'd', '\0'};
+            auto rsp_pack = asyncmsg::packet(req_pack.packet_cmd(), true, req_pack.packet_device_id(), req_pack.packet_seq(), data, sizeof(data));
+            co_await srv->send_packet(rsp_pack);
+            std::cout << get_time_string() << ", send rsp" << ", data = " << (char*)data << std::endl;
+        }
+    };
+    
+    asio::co_spawn(io_context.get_executor(), task(), asio::detached);
 
-                std::cout << get_time_string() << ", recv req" << ", data = " << (char*)(req_pack.packet_body().buf()) << std::endl;
-                
-                uint8_t data[] = {'w', 'o', 'r', 'l', 'd', '\0'};
-                auto rsp_pack = asyncmsg::packet(req_pack.packet_cmd(), true, req_pack.packet_device_id(), req_pack.packet_seq(), data, sizeof(data));
-                co_await srv->send_packet(rsp_pack);
-                std::cout << get_time_string() << ", send rsp" << ", data = " << (char*)data << std::endl;
-            }
-        };
-        
-        asio::co_spawn(io_context.get_executor(), task(), asio::detached);
+    io_context.run();
 
-        io_context.run();
-    }
-    catch (std::exception& e) {
-      std::printf("Exception: %s\n", e.what());
-    }
-
-    return 0;
+return 0;
 }
 
