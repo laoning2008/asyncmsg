@@ -56,8 +56,8 @@ int main(int argc, char** argv) {
         }
     };
 
-    asio::co_spawn(io_context.get_executor(), task(), asio::detached);
-    asio::co_spawn(io_context.get_executor(), task(), asio::detached);
+    asio::co_spawn(cli->get_io_context(), task(), asio::detached);
+    asio::co_spawn(cli->get_io_context(), task(), asio::detached);
 
     io_context.run();
     return 0;

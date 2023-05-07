@@ -30,8 +30,12 @@ public:
         }
     }
     
+    asio::io_context& get_io_context() {
+        return io_context;
+    }
+    
     asio::awaitable<void> send_packet(packet pack) {
-        co_await schedule(io_context.get_executor());
+//        co_await schedule(io_context.get_executor());
         for (auto& conn : connections) {
             if (conn->get_device_id() == pack.packet_device_id()) {
                 co_await conn->send_packet(pack);
@@ -40,7 +44,7 @@ public:
     }
     
     asio::awaitable<packet> send_packet(packet pack, uint32_t timeout_seconds, uint32_t max_tries) {
-        co_await schedule(io_context.get_executor());
+//        co_await schedule(io_context.get_executor());
         
         for (auto& conn : connections) {
             if (conn->get_device_id() == pack.packet_device_id()) {
@@ -59,7 +63,7 @@ public:
     }
     
     asio::awaitable<packet> await_request(uint32_t cmd) {
-        co_await schedule(io_context.get_executor());
+//        co_await schedule(io_context.get_executor());
         
         auto it = received_request_channels.find(cmd);
         if (it == received_request_channels.end()) {
