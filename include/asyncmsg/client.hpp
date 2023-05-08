@@ -68,7 +68,7 @@ public:
                 asio::steady_timer timer(io_context.get_executor(), std::chrono::seconds(timeout_seconds));
                 co_await timer.async_wait(use_nothrow_awaitable);
                 
-                std::cout << "connect, io_thread_id = " << io_thread.get_id() << ", this thead id=" << std::this_thread::get_id() << std::endl;
+//                std::cout << "connect, io_thread_id = " << io_thread.get_id() << ", this thead id=" << std::this_thread::get_id() << std::endl;
 
                 continue;
             }
