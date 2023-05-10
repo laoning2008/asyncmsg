@@ -5,8 +5,10 @@
 #include <chrono>
 #include <list>
 #include <future>
+#include <cassert>
 #include <asyncmsg/detail/connection.hpp>
 #include <asyncmsg/detail/async_schedule.hpp>
+#include <asyncmsg/detail/debug_helper.hpp>
 
 namespace asyncmsg {
 
@@ -35,7 +37,12 @@ public:
     }
     
     asio::awaitable<void> send_packet(packet pack) {
-//        co_await schedule(io_context.get_executor());
+        if (std::this_thread::get_id() != io_thread.get_id()) {
+            std::cout << detail::get_time_string() << ", should only call in io_thread. call get_io_context get io_context!" << std::endl;
+            assert(false);
+            co_return;
+        }
+        
         for (auto& conn : connections) {
             if (conn->get_device_id() == pack.packet_device_id()) {
                 co_await conn->send_packet(pack);
@@ -44,7 +51,11 @@ public:
     }
     
     asio::awaitable<packet> send_packet(packet pack, uint32_t timeout_seconds, uint32_t max_tries) {
-//        co_await schedule(io_context.get_executor());
+        if (std::this_thread::get_id() != io_thread.get_id()) {
+            std::cout << detail::get_time_string() << ", should only call in io_thread. call get_io_context get io_context!" << std::endl;
+            assert(false);
+            co_return packet{};
+        }
         
         for (auto& conn : connections) {
             if (conn->get_device_id() == pack.packet_device_id()) {
@@ -63,7 +74,11 @@ public:
     }
     
     asio::awaitable<packet> await_request(uint32_t cmd) {
-//        co_await schedule(io_context.get_executor());
+        if (std::this_thread::get_id() != io_thread.get_id()) {
+            std::cout << detail::get_time_string() << ", should only call in io_thread. call get_io_context get io_context!" << std::endl;
+            assert(false);
+            co_return packet{};
+        }
         
         auto it = received_request_channels.find(cmd);
         if (it == received_request_channels.end()) {
@@ -98,7 +113,7 @@ private:
                     co_await it->second->async_send(asio::error_code{}, pack, use_nothrow_awaitable);
                 }
             } else {
-                std::cout << "connection_disconnected" << std::endl;
+                std::cout << detail::get_time_string() << ", connection_disconnected" << std::endl;
                 break;
             }
         }
@@ -112,7 +127,6 @@ private:
             }
         }
     }
-    
 private:
     asio::io_context io_context;
     std::thread io_thread;

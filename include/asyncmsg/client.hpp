@@ -10,6 +10,8 @@
 #include <asio/connect.hpp>
 
 #include <asyncmsg/detail/connection.hpp>
+#include <asyncmsg/detail/debug_helper.hpp>
+
 
 namespace asyncmsg {
 
@@ -20,7 +22,7 @@ class client {
 public:
     client(std::string host, const uint16_t port, std::string device_id_)
     : work_guard(io_context.get_executor()), device_id(std::move(device_id_))
-    , server_host(host), server_port(port) {
+    , server_host(std::move(host)), server_port(port) {
         io_thread = std::thread([this]() {
             io_context.run();
         });
@@ -29,10 +31,18 @@ public:
 
     ~client() {
         auto task = [this]() -> asio::awaitable<void> {
+            stopped = true;
+            
             if (conn) {
+                std::cout << detail::get_time_string() << ", stop conn begin" << std::endl;
                 co_await conn->stop();
+                std::cout << detail::get_time_string() << ", stop conn end" << std::endl;
             }
+            
+            std::cout << detail::get_time_string() << ", set conn = nullptr" << std::endl;
             conn = nullptr;
+            
+            std::cout << detail::get_time_string() << ", io_context.stop" << std::endl;
             io_context.stop();
         };
         
@@ -48,10 +58,18 @@ public:
     }
     
     asio::awaitable<void> send_packet(packet pack) {
-//        co_await schedule(io_context.get_executor());
+        if (stopped) {
+            co_return;
+        }
+        
+        if (std::this_thread::get_id() != io_thread.get_id()) {
+            std::cout << detail::get_time_string() << ", should only call in io_thread. call get_io_context get io_context!" << std::endl;
+            assert(false);
+            co_return;
+        }
         
         if (!conn) {
-            std::cout << "send_packet--conn==nullptr" << std::endl;
+            std::cout << detail::get_time_string() << ", send_packet--conn==nullptr" << std::endl;
             co_return;
         }
         
@@ -59,19 +77,25 @@ public:
     }
 
     asio::awaitable<packet> send_packet(packet pack, uint32_t timeout_seconds, uint32_t max_tries) {
-//        co_await schedule(io_context.get_executor());
-    
-
+        if (stopped) {
+            co_return packet{};
+        }
+        
+        if (std::this_thread::get_id() != io_thread.get_id()) {
+            std::cout << detail::get_time_string() << ", should only call in io_thread. call get_io_context get io_context!" << std::endl;
+            assert(false);
+            co_return packet{};
+        }
+        
         for (auto i = 0; i < max_tries; ++i) {
             if (!conn) {
-                std::cout << "send_packet--conn==nullptr" << std::endl;
+                std::cout << detail::get_time_string() << ", send_packet--conn==nullptr" << std::endl;
                 asio::steady_timer timer(io_context.get_executor(), std::chrono::seconds(timeout_seconds));
                 co_await timer.async_wait(use_nothrow_awaitable);
-                
-//                std::cout << "connect, io_thread_id = " << io_thread.get_id() << ", this thead id=" << std::this_thread::get_id() << std::endl;
-
                 continue;
             }
+            
+//            std::cout << detail::get_time_string() << ", send_packet, tries = " << i << std::endl;
             
             auto rsp_pack = co_await conn->send_packet(pack, timeout_seconds);
             
@@ -84,7 +108,15 @@ public:
     }
 
     asio::awaitable<packet> await_request(uint32_t cmd) {
-//        co_await schedule(io_context.get_executor());
+        if (stopped) {
+            co_return packet{};
+        }
+        
+        if (std::this_thread::get_id() != io_thread.get_id()) {
+            std::cout << detail::get_time_string() << ", should only call in io_thread. call get_io_context get io_context!" << std::endl;
+            assert(false);
+            co_return packet{};
+        }
         
         auto it = received_request_channels.find(cmd);
         if (it == received_request_channels.end()) {
@@ -96,13 +128,11 @@ public:
     }
 private:
     asio::awaitable<void> start() {
-        for (;;) {
-            std::cout << "connect--start" << std::endl;
+        while (!stopped) {
             co_await connect();
-            std::cout << "connect--end" << std::endl;
             
             if (!conn) {
-                std::cout << "conn == nullptr" << std::endl;
+                std::cout << detail::get_time_string() << ", conn == nullptr" << std::endl;
                 asio::steady_timer timer(io_context.get_executor(), std::chrono::seconds(reconnect_interval_seconds));
                 co_await timer.async_wait(use_nothrow_awaitable);
                 continue;
@@ -112,18 +142,19 @@ private:
                 auto result = co_await(conn->request_received() || conn->connection_disconnected());
                 
                 if (result.index() == 0) {
-                    packet pack(std::get<0>(std::move(result)));
+                    packet pack(std::get<0>(result));
                     auto it = received_request_channels.find(pack.packet_cmd());
                     if (it != received_request_channels.end()) {
                         co_await it->second->async_send(asio::error_code{}, pack, use_nothrow_awaitable);
                     }
                 } else {
+                    std::cout << detail::get_time_string() << ", stop conn begin2" << std::endl;
                     co_await conn->stop();
+                    std::cout << detail::get_time_string() << ", stop conn end2" << std::endl;
                     conn = nullptr;
                     break;
                 }
             }
-
         }
     }
     
@@ -136,16 +167,16 @@ private:
 
         asio::ip::tcp::socket socket(io_context);
         
-        std::cout << "async_connect begin" << std::endl;
+        std::cout << detail::get_time_string() << ", async_connect begin" << std::endl;
         auto [e_connect, endpoint] = co_await asio::async_connect(socket, endpoints, use_nothrow_awaitable);
-        std::cout << "async_connect end, e = " << e_connect.message() << std::endl;
+        std::cout << detail::get_time_string() << ", async_connect end, e = " << e_connect.message() << std::endl;
         if (!e_connect) {
             conn = std::make_unique<connection>(std::move(socket), device_id);
         }
     }
 private:
     volatile bool stopped{false};
-
+    
     asio::io_context io_context;
     std::thread io_thread;
     asio::executor_work_guard<asio::io_context::executor_type> work_guard;
