@@ -18,7 +18,6 @@
 
 #include <asyncmsg/detail/io_buffer.hpp>
 #include <asyncmsg/detail/async_event.hpp>
-#include <asyncmsg/detail/async_schedule.hpp>
 #include <asyncmsg/detail/oneshot.hpp>
 #include <asyncmsg/detail/packet.hpp>
 #include <asyncmsg/detail/debug_helper.hpp>
@@ -28,15 +27,18 @@ constexpr auto use_nothrow_awaitable = asio::as_tuple(asio::use_awaitable);
 
 namespace asyncmsg {
 
+using packet_channel = asio::experimental::channel<void(asio::error_code, asyncmsg::packet)>;
+using received_request_channel_map = std::unordered_map<uint32_t, std::unique_ptr<packet_channel>>;
+constexpr static uint32_t received_packet_channel_size = 64;
+
 class connection {
     constexpr static uint32_t recv_buf_size = 128*1024;
     constexpr static uint32_t active_connection_lifetime_seconds = 30;
     constexpr static uint32_t active_connection_lifetime_check_interval_seconds = 1;
 
     using request_map_t = std::unordered_map<uint64_t, std::pair<oneshot::sender<asyncmsg::packet>, std::unique_ptr<asio::steady_timer>>>;
-public:
-    using packet_channel = asio::experimental::channel<void(asio::error_code, asyncmsg::packet)>;
-    constexpr static uint32_t received_packet_channel_size = 64;
+    enum class object_state {running,closed,stopping,stopped};
+
 public:
     connection(asio::ip::tcp::socket socket_, std::string device_id_ = {})
     : socket(std::move(socket_))
@@ -44,7 +46,8 @@ public:
     , last_recv_time(std::chrono::steady_clock::now())
     , received_request_channel(socket.get_executor(), received_packet_channel_size)
     , on_disconnected(oneshot::create<void>())
-    , check_timer(socket.get_executor()) {
+    , check_timer(socket.get_executor())
+    , on_stopped(oneshot::create<void>()) {
         start();
     }
     
@@ -53,20 +56,37 @@ public:
     }
     
     asio::awaitable<void> stop() {
-        std::cout << detail::get_time_string() << ", stop connection begin" << std::endl;
-        close();
+        if (state == object_state::stopped) {
+            co_return;
+        }
         
+        if (state == object_state::stopping) {
+            co_await on_stopped.second.async_wait(use_nothrow_awaitable);
+            co_return;
+        }
+        
+        if (state == object_state::running) {
+            close();
+        }
+        
+        state = object_state::stopping;
+        
+        std::cout << detail::get_time_string() << ", wait_all_async_task_finished begin" << std::endl;
         asio::steady_timer wait_timer(co_await asio::this_coro::executor);
         while (processing || !requests.empty()) {
             std::cout << detail::get_time_string() << ", stop connection running = " << processing << ", requests.size =" << requests.size() << std::endl;
             wait_timer.expires_after(std::chrono::milliseconds(100));
             co_await wait_timer.async_wait(use_nothrow_awaitable);
         }
-        std::cout << detail::get_time_string() << ", stop connection end" << std::endl;
+        
+        std::cout << detail::get_time_string() << ", wait_all_async_task_finished end" << std::endl;
+        
+        state = object_state::stopped;
+        on_stopped.first.send();
     }
     
     asio::awaitable<void> send_packet(packet pack) {
-        if (stopped) {
+        if (!can_work()) {
             co_return;
         }
         
@@ -76,7 +96,7 @@ public:
     }
     
     asio::awaitable<packet> send_packet(packet pack, uint32_t timeout_seconds) {
-        if (stopped) {
+        if (!can_work()) {
             co_return packet{};
         }
                 
@@ -131,10 +151,8 @@ private:
     }
     
     void close() {
-        if (!stopped) {
+        if (state == object_state::running) {
             std::cout << detail::get_time_string() << ", close begin" << std::endl;
-            
-            stopped = true;
             
             check_timer.cancel();
             for (auto& request : requests) {
@@ -148,8 +166,14 @@ private:
             
             on_disconnected.first.send();
             
+            state = object_state::closed;
+            
             std::cout << detail::get_time_string() << ", close end" << std::endl;
         }
+    }
+    
+    bool can_work() {
+        return state == object_state::running;
     }
     
     asio::awaitable<void> check() {
@@ -242,8 +266,8 @@ private:
         co_return success;
     }
 private:
+    object_state state{object_state::running};
     volatile bool processing{false};
-    volatile bool stopped{false};
     
     asio::ip::tcp::socket socket;
     std::string device_id;
@@ -255,6 +279,7 @@ private:
     packet_channel received_request_channel;
     
     asio::steady_timer check_timer;
+    std::pair<oneshot::sender<void>, oneshot::receiver<void>> on_stopped;
 };
 
 }
