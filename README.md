@@ -1,9 +1,9 @@
-# AsyncMsg Library
+# AsyncMsg
 
-The AsyncMsg library is a C++ library that provides a simple API for asynchronous message passing over TCP sockets. It is built on top of the asio library, and provides a lightweight and efficient way to implement server and client applications that communicate over a network.
+The AsyncMsg is a C++ library that provides a simple API for asynchronous message passing over TCP sockets. It is built on top of the asio library, and provides a lightweight and efficient way to implement server and client applications that communicate over a network.
 
-## Installation
-you can use CMake to integrate the asyncmsg library into your project. Here is an example CMakeLists.txt file that demonstrates how to do this:
+## Integration
+you can use CMake to integrate the asyncmsg into your project. Here is an example CMakeLists.txt file that demonstrates how to do this:
 
 ```cmake
 cmake_minimum_required(VERSION 3.5)
@@ -16,7 +16,7 @@ target_link_libraries(my_executable asyncmsg)
 ```
 
 ## Server Example
-Here's an example of how to use the AsyncMsg library to create a simple server that listens for incoming requests on port 5555, and send responses back:
+Here's an example of how to use the AsyncMsg to create a simple server that listens for incoming requests on port 5555, and send responses back:
 
 ```cpp
 #include <asio.hpp>
