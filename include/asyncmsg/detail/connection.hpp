@@ -19,7 +19,7 @@
 #include <asyncmsg/detail/io_buffer.hpp>
 #include <asyncmsg/detail/async_event.hpp>
 #include <asyncmsg/detail/oneshot.hpp>
-#include <asyncmsg/detail/packet.hpp>
+#include <asyncmsg/packet.hpp>
 #include <asyncmsg/detail/debug_helper.hpp>
 
 using namespace asio::experimental::awaitable_operators;

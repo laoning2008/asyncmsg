@@ -5,7 +5,7 @@
 
 #include <asyncmsg/detail/crc.hpp>
 #include <asyncmsg/detail/byte_order.hpp>
-#include <asyncmsg/detail/ibuffer.hpp>
+#include <asyncmsg/ibuffer.hpp>
 
 namespace asyncmsg {
 

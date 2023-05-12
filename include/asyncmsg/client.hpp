@@ -9,6 +9,9 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/detached.hpp>
 #include <asio/connect.hpp>
+#include <asio/awaitable.hpp>
+#include <asio/experimental/awaitable_operators.hpp>
+#include <asio/experimental/as_tuple.hpp>
 
 #include <asyncmsg/detail/connection.hpp>
 #include <asyncmsg/detail/debug_helper.hpp>

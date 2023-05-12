@@ -6,6 +6,11 @@
 #include <list>
 #include <future>
 #include <cassert>
+
+#include <asio/awaitable.hpp>
+#include <asio/experimental/awaitable_operators.hpp>
+#include <asio/experimental/as_tuple.hpp>
+
 #include <asyncmsg/detail/connection.hpp>
 #include <asyncmsg/detail/debug_helper.hpp>
 
