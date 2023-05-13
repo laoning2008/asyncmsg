@@ -29,13 +29,13 @@ int main(int argc, char** argv) {
                 continue;
             }
             
-            std::cout << asyncmsg::detail::get_time_string() << ", recv req" << ", data = " << (char*)(req_pack.packet_body().buf()) << std::endl;
+            asyncmsg::detail::print_log(std::string("recv req, data = ") + (char*)(req_pack.packet_body().buf()));
             
             uint8_t data[] = {'w', 'o', 'r', 'l', 'd', '\0'};
             auto rsp_pack = asyncmsg::packet(req_pack.packet_cmd(), true, req_pack.packet_device_id(), req_pack.packet_seq(), data, sizeof(data));
  
             co_await srv.send_packet(rsp_pack);
-            std::cout << asyncmsg::detail::get_time_string() << ", send rsp" << ", data = " << (char*)data << std::endl;
+            asyncmsg::detail::print_log(std::string("send rsp, data = ") + (char*)data);
         }
     };
     

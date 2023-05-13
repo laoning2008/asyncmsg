@@ -21,10 +21,6 @@ int main(int argc, char** argv) {
 
     signals.async_wait([&](auto, auto) {
         io_context.stop();
-//        auto task = [&]() -> asio::awaitable<void> {
-//            co_await cli.stop();
-//        };
-//        asio::co_spawn(io_context, task(), asio::detached);
     });
 
     auto task = [&]() -> asio::awaitable<void> {
@@ -36,13 +32,13 @@ int main(int argc, char** argv) {
             uint8_t data[] = {'h', 'e', 'l', 'l', 'o', '\0'};
             auto pack = asyncmsg::packet(1, false, device_id, 0, data, sizeof(data));
 
-            std::cout << asyncmsg::detail::get_time_string() << ", send req" << ", data = " << (char*)data << std::endl;
+            asyncmsg::detail::print_log(std::string("send req, data = ") + (char*)data);
 
             auto rsp_pack = co_await cli.send_packet(pack, 3, 3);
             if (rsp_pack.packet_body().len() > 0) {
-                std::cout << asyncmsg::detail::get_time_string() << ", recv rsp" << ", data = " << (char*)(rsp_pack.packet_body().buf()) << std::endl;
+                asyncmsg::detail::print_log(std::string("recv rsp, data = ") + (char*)(rsp_pack.packet_body().buf()));
             } else {
-                std::cout << asyncmsg::detail::get_time_string() << ", recv rsp failed" << std::endl;
+                asyncmsg::detail::print_log("recv rsp failed");
             }
         }
     };

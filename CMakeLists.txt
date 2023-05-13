@@ -19,6 +19,11 @@ add_library(asyncmsg INTERFACE)
 target_link_libraries(asyncmsg INTERFACE asio)
 target_include_directories(asyncmsg INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+option(ASYNC_MSG_ENABLE_LOGGING "Build the exmples" ON)
+if (${ASYNC_MSG_ENABLE_LOGGING})
+    add_definitions(-DASYNC_MSG_ENABLE_LOGGING)
+endif()
+
 option(ASYNC_MSG_ENABLE_EXAMPLES "Build the exmples" ON)
 if (${ASYNC_MSG_ENABLE_EXAMPLES})
     add_subdirectory(examples)

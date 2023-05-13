@@ -16,6 +16,7 @@
 #include <asyncmsg/detail/connection.hpp>
 #include <asyncmsg/detail/debug_helper.hpp>
 
+#include <format>
 
 namespace asyncmsg {
 
@@ -36,13 +37,13 @@ public:
     }
 
     ~client() {
-        std::cout << detail::get_time_string() << ", ~clien bedin" << std::endl;
+        detail::print_log("~clien bedin");
         asio::co_spawn(io_context, stop(), asio::detached);
         
         if (io_thread.joinable()) {
             io_thread.join();
         }
-        std::cout << detail::get_time_string() << ", ~client end" << std::endl;
+        detail::print_log("~clien end");
     }
     
     asio::awaitable<void> stop() {
@@ -71,11 +72,11 @@ public:
             if (conn) {
                 co_await conn->stop();
             }
-            
-            std::cout << detail::get_time_string() << ", set conn = nullptr" << std::endl;
+  
+            detail::print_log("set conn = nullptr");
             conn = nullptr;
             
-            std::cout << detail::get_time_string() << ", work_guard.reset" << std::endl;
+            detail::print_log("work_guard.reset");
             work_guard.reset();
             
             state = object_state::stopped;
@@ -92,7 +93,7 @@ public:
             }
             
             if (!conn) {
-                std::cout << detail::get_time_string() << ", send_packet--conn==nullptr" << std::endl;
+                detail::print_log(" send_packet--conn==nullptr");
                 co_return;
             }
             
@@ -117,7 +118,7 @@ public:
                 }
                 
                 if (!conn) {
-                    std::cout << detail::get_time_string() << ", send_packet--conn==nullptr" << std::endl;
+                    detail::print_log(" send_packet--conn==nullptr");
                     timer->expires_after(std::chrono::seconds(timeout_seconds));
                     co_await timer->async_wait(use_nothrow_awaitable);
                     continue;
@@ -164,10 +165,10 @@ private:
             co_await connect();
             
             if (!conn) {
-                std::cout << detail::get_time_string() << ", conn == nullptr" << std::endl;
+                detail::print_log("conn == nullptr");
                 connect_timer.expires_after(std::chrono::seconds(reconnect_interval_seconds));
                 co_await connect_timer.async_wait(use_nothrow_awaitable);
-                std::cout << detail::get_time_string() << ", connect async_wait end" << std::endl;
+                detail::print_log("connect async_wait end");
                 continue;
             }
             
@@ -181,16 +182,16 @@ private:
                         co_await it->second->async_send(asio::error_code{}, pack, use_nothrow_awaitable);
                     }
                 } else {
-                    std::cout << detail::get_time_string() << ", stop conn begin2" << std::endl;
+                    detail::print_log("stop conn begin2");
                     co_await conn->stop();
-                    std::cout << detail::get_time_string() << ", stop conn end2" << std::endl;
+                    detail::print_log("stop conn end2");
                     conn = nullptr;
                     break;
                 }
             }
         }
         
-        std::cout << detail::get_time_string() << ", start() exit" << std::endl;
+        detail::print_log("start() exit");
     }
     
     asio::awaitable<void> connect() {
@@ -202,9 +203,9 @@ private:
 
         asio::ip::tcp::socket socket(io_context);
         
-        std::cout << detail::get_time_string() << ", async_connect begin" << std::endl;
+        detail::print_log("async_connect begin");
         auto [e_connect, endpoint] = co_await asio::async_connect(socket, endpoints, use_nothrow_awaitable);
-        std::cout << detail::get_time_string() << ", async_connect end, e = " << e_connect.message() << std::endl;
+        detail::print_log("async_connect end");
         if (!e_connect) {
             conn = std::make_unique<connection>(std::move(socket), device_id);
         }

@@ -52,7 +52,7 @@ public:
     }
     
     ~connection() {
-        std::cout << detail::get_time_string() << ", ~connection" << std::endl;
+        detail::print_log("~connection");
     }
     
     asio::awaitable<void> stop() {
@@ -71,15 +71,15 @@ public:
         
         state = object_state::stopping;
         
-        std::cout << detail::get_time_string() << ", wait_all_async_task_finished begin" << std::endl;
+        detail::print_log("wait_all_async_task_finished begin");
         asio::steady_timer wait_timer(co_await asio::this_coro::executor);
         while (processing || !requests.empty()) {
-            std::cout << detail::get_time_string() << ", stop connection running = " << processing << ", requests.size =" << requests.size() << std::endl;
+            detail::print_log(std::string("stop connection processing = ") + std::to_string(processing) + ", requests.size =" + std::to_string(requests.size()));
+            
             wait_timer.expires_after(std::chrono::milliseconds(100));
             co_await wait_timer.async_wait(use_nothrow_awaitable);
         }
-        
-        std::cout << detail::get_time_string() << ", wait_all_async_task_finished end" << std::endl;
+        detail::print_log("wait_all_async_task_finished end");
         
         state = object_state::stopped;
         on_stopped.first.send();
@@ -105,7 +105,7 @@ public:
         auto [e_write, _] = co_await asio::async_write(socket, buf, use_nothrow_awaitable);
         
         if (e_write) {
-            std::cout << detail::get_time_string() << "async_write err=" << e_write.message() << std::endl;
+            detail::print_log("async_write err=" + e_write.message());
             close();
             co_return packet{};
         }
@@ -118,7 +118,7 @@ public:
         requests.erase(id);
         
         if (result.index() == 0) {
-            std::cout << detail::get_time_string() << "send timeout" << std::endl;
+            detail::print_log("send timeout");
             co_return packet{};
         }
         
@@ -144,7 +144,7 @@ private:
             processing = true;
             co_await(check() || receive_packet());
             processing = false;
-            std::cout << detail::get_time_string() << ", set processing = false" << std::endl;
+            detail::print_log("set processing = false");
         };
         
         co_spawn(socket.get_executor(), task, asio::detached);
@@ -152,7 +152,7 @@ private:
     
     void close() {
         if (state == object_state::running) {
-            std::cout << detail::get_time_string() << ", close begin" << std::endl;
+            detail::print_log("close begin");
             
             check_timer.cancel();
             for (auto& request : requests) {
@@ -168,7 +168,7 @@ private:
             
             state = object_state::closed;
             
-            std::cout << detail::get_time_string() << ", close end" << std::endl;
+            detail::print_log("close end");
         }
     }
     
@@ -211,7 +211,7 @@ private:
             
             if (e) {
                 close();
-                std::cout << detail::get_time_string() << ", read err = " << e.message() << std::endl;
+                detail::print_log("read err = " + e.message());
                 break;
             }
             
@@ -237,7 +237,6 @@ private:
             }
             
             if (pack->packet_device_id().empty()) {
-                std::cout << detail::get_time_string() << ", recv pack, device id is empty" << std::endl;
                 continue;
             }
             
