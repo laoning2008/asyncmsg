@@ -16,7 +16,7 @@
 
 namespace asyncmsg {
 
-class server {
+class server final {
     using connection_list = std::list<std::unique_ptr<connection>>;
     enum class object_state {running,stopping,stopped};
 public:

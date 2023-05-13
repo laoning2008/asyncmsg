@@ -23,7 +23,7 @@ namespace detail {
         0x74, 0x2a, 0xc8, 0x96, 0x15, 0x4b, 0xa9, 0xf7, 0xb6, 0xe8, 0x0a, 0x54, 0xd7, 0x89, 0x6b, 0x35,
     };
 
-    uint8_t calc_crc8(const uint8_t* data, uint32_t len) {
+    inline uint8_t calc_crc8(const uint8_t* data, uint32_t len) {
         uint8_t val = 0x77;
         for (auto i = 0; i < len; i++) {
             val = val ^ data[i];

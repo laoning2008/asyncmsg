@@ -20,7 +20,7 @@
 
 namespace asyncmsg {
 
-class client {
+class client final {
     using list_timer = std::list<std::unique_ptr<asio::steady_timer>>;
     constexpr static uint32_t reconnect_interval_seconds = 3;
     enum class object_state {running,stopping,stopped};
@@ -92,6 +92,10 @@ public:
                 co_return;
             }
             
+            if (!reset_device_id_if_needed(pack)) {
+                co_return;
+            }
+                
             if (!conn) {
                 detail::print_log(" send_packet--conn==nullptr");
                 co_return;
@@ -106,6 +110,10 @@ public:
     asio::awaitable<packet> send_packet(packet pack, uint32_t timeout_seconds, uint32_t max_tries) {
         auto task = [this](packet pack, uint32_t timeout_seconds, uint32_t max_tries) -> asio::awaitable<packet> {
             if (!can_work()) {
+                co_return packet{};
+            }
+            
+            if (!reset_device_id_if_needed(pack)) {
                 co_return packet{};
             }
             
@@ -209,6 +217,15 @@ private:
         if (!e_connect) {
             conn = std::make_unique<connection>(std::move(socket), device_id);
         }
+    }
+    
+    bool reset_device_id_if_needed(packet& pack) {
+        if (pack.packet_device_id().empty()) {
+            pack.set_packet_device_id(device_id);
+            return true;
+        }
+        
+        return (pack.packet_device_id() == device_id);
     }
 private:
     object_state state{object_state::running};

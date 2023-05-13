@@ -33,7 +33,7 @@ class packet {
 public:
     packet() = default;
     
-    packet(uint32_t cmd_, bool rsp_, std::string device_id_, uint32_t seq_ = 0, uint8_t* body_buf_ = {}, uint32_t body_len_ = {})
+    packet(uint32_t cmd_, bool rsp_, uint32_t seq_ = 0, uint8_t* body_buf_ = {}, uint32_t body_len_ = {}, std::string device_id_ = {})
     : cmd(cmd_), seq((seq_==0)?++seq_generator:seq_), rsp(rsp_), device_id(std::move(device_id_)), body(body_buf_, body_len_, true) {
     }
 
@@ -55,6 +55,10 @@ public:
     
     const std::string& packet_device_id() const {
         return device_id;
+    }
+    
+    void set_packet_device_id(std::string id) {
+        device_id = std::move(id);
     }
     
     const ibuffer packet_body() const {
@@ -132,7 +136,7 @@ static std::unique_ptr<packet> parse_packet(uint8_t* buf, size_t buf_len, size_t
         uint32_t seq = asyncmsg::detail::network_to_host_32(header->seq);
         bool rsp = (header->rsp == 0) ? false : true;
         std::string device_id = (char*)header->device_id;
-        return std::make_unique<packet>(cmd, rsp, device_id, seq, buf_valid + header_length, body_len);
+        return std::make_unique<packet>(cmd, rsp, seq, buf_valid + header_length, body_len, device_id);
     } while (1);
     
     return nullptr;

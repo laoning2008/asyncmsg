@@ -1,14 +1,5 @@
-//#include <asyncmsg.hpp>
-#include <thread>
-#include <asio/io_context.hpp>
-#include <asio/signal_set.hpp>
 #include <asio.hpp>
-#include <iostream>
 #include <asyncmsg/server.hpp>
-#include <locale>
-#include <iomanip>
-#include <ctime>
-#include <sstream>
 #include <asyncmsg/detail/debug_helper.hpp>
 
 int main(int argc, char** argv) {
@@ -32,7 +23,7 @@ int main(int argc, char** argv) {
             asyncmsg::detail::print_log(std::string("recv req, data = ") + (char*)(req_pack.packet_body().buf()));
             
             uint8_t data[] = {'w', 'o', 'r', 'l', 'd', '\0'};
-            auto rsp_pack = asyncmsg::packet(req_pack.packet_cmd(), true, req_pack.packet_device_id(), req_pack.packet_seq(), data, sizeof(data));
+            auto rsp_pack = asyncmsg::packet(req_pack.packet_cmd(), true, req_pack.packet_seq(), data, sizeof(data), req_pack.packet_device_id());
  
             co_await srv.send_packet(rsp_pack);
             asyncmsg::detail::print_log(std::string("send rsp, data = ") + (char*)data);
