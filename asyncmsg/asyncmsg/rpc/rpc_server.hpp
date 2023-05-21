@@ -19,7 +19,9 @@ class rpc_server final {
 public:
     rpc_server(uint32_t port)
     : server(port)
-    , work_guard(io_context.get_executor()) {
+    , work_guard(io_context.get_executor())
+//    , on_stopped(base::create<void>())
+    {
     }
     
     ~rpc_server() {
@@ -62,6 +64,7 @@ private:
     asio::awaitable<void> register_sync_handler_impl(std::string rpc_name, std::function<rpc_result<RSP>(REQ req)> handler) {
         auto id = detail::rpc_id(rpc_name);
         for (;;) {
+//            base::print_log("await_request");
             asyncmsg::tcp::packet req_pack = co_await server.await_request(id);
 
             if (!req_pack.is_valid()) {
@@ -109,6 +112,8 @@ private:
     asio::io_context io_context;
     asio::executor_work_guard<asio::io_context::executor_type> work_guard;
     std::vector<std::thread> workers;
+    
+//    std::pair<base::sender<void>, base::receiver<void>> on_stopped;
 };
 
 }}
