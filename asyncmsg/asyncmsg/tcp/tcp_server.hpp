@@ -30,13 +30,13 @@ public:
     }
     
     ~tcp_server() {
-        std::cout << base::get_time_string() << ", ~server bedin" << std::endl;
+        base::print_log("~server bedin");
         asio::co_spawn(io_context, stop(), asio::detached);
         
         if (io_thread.joinable()) {
             io_thread.join();
         }
-        std::cout << base::get_time_string() << ", ~server end" << std::endl;
+        base::print_log("~server end");
     }
     
     asio::awaitable<void> stop() {
@@ -63,7 +63,7 @@ public:
                 co_await conn->stop();
             }
             
-            std::cout << base::get_time_string() << ", work_guard.reset" << std::endl;
+            base::print_log("work_guard.reset");
             work_guard.reset();
             
             state = object_state::stopped;
@@ -155,15 +155,16 @@ private:
         
         for (;;) {
             auto result = co_await(conn->request_received() || conn->connection_disconnected());
-            
+                        
             if (result.index() == 0) {
                 packet pack(std::get<0>(std::move(result)));
+                                
                 auto it = received_request_channels.find(pack.packet_cmd());
                 if (it != received_request_channels.end()) {
                     co_await it->second->async_send(asio::error_code{}, pack, use_nothrow_awaitable);
                 }
             } else {
-                std::cout << base::get_time_string() << ", connection_disconnected" << std::endl;
+                base::print_log("connection_disconnected");
                 break;
             }
         }

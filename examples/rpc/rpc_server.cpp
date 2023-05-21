@@ -13,6 +13,7 @@ int main(int argc, char** argv) {
         add_rsp rsp;
         rsp.set_result(req.left() + req.right());
         return rsp;
+//        return asyncmsg::rpc::rpc_unexpected_result{100};
     });
     
     srv.start(std::thread::hardware_concurrency());
@@ -20,7 +21,6 @@ int main(int argc, char** argv) {
     signals.async_wait([&](auto, auto) {
         io_context.stop();
     });
-
 
     io_context.run();
     return 0;

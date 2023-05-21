@@ -22,7 +22,7 @@ namespace asyncmsg { namespace tcp {
 
 class tcp_client final {
     using list_timer = std::list<std::unique_ptr<asio::steady_timer>>;
-    constexpr static uint32_t reconnect_interval_seconds = 3;
+    constexpr static uint32_t reconnect_interval_seconds = 1;
     enum class object_state {running,stopping,stopped};
 public:
     tcp_client(std::string host, const uint16_t port, std::string device_id_)

@@ -29,16 +29,16 @@ int main(int argc, char** argv) {
 
             auto result = co_await asyncmsg::rpc::call<add_rsp>(cli, "add", req);
             if (!result) {
-                asyncmsg::base::print_log("call error = " + std::to_string(result.error()));
+                asyncmsg::base::print_log("call add(1,2) error = " + std::to_string(result.error()));
             } else {
-                asyncmsg::base::print_log("call result = " + std::to_string(result.value().result()));
+                asyncmsg::base::print_log("call add(1,2) result = " + std::to_string(result.value().result()));
 
             }
         }
     };
 
     asio::co_spawn(io_context, task(), asio::detached);
-//    asio::co_spawn(io_context, task(), asio::detached);
+    asio::co_spawn(io_context, task(), asio::detached);
 
     io_context.run();
     

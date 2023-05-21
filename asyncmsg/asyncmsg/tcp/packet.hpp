@@ -86,6 +86,7 @@ public:
         header.flag = packet_begin_flag;
         header.cmd = base::host_to_network_32(cmd);
         header.seq = base::host_to_network_32(seq);
+        header.ec = base::host_to_network_32(ec);
         header.rsp = rsp ? 1 : 0;
 
         memset(header.device_id, 0, sizeof(header.device_id));

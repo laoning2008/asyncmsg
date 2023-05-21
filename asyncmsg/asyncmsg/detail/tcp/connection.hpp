@@ -113,7 +113,7 @@ public:
         }
         
         auto [s, r] = base::create<packet>();
-        auto id = pack.packet_cmd() << 31 | pack.packet_seq();
+        uint64_t id = packet_id(pack.packet_cmd(), pack.packet_seq());
         
         requests.emplace(id, std::make_pair(std::move(s), std::make_unique<asio::steady_timer>(co_await asio::this_coro::executor, std::chrono::seconds(timeout_seconds))));
         auto result = co_await(requests[id].second->async_wait(use_nothrow_awaitable) || r.async_wait(use_nothrow_awaitable));
@@ -254,7 +254,8 @@ private:
             auto pack_copy = *pack.get();
             
             if (pack_copy.is_response()) {
-                auto pack_id = pack_copy.packet_cmd() << 31 | pack_copy.packet_seq();
+                uint64_t pack_id = packet_id(pack_copy.packet_cmd(), pack_copy.packet_seq());
+                
                 auto it = requests.find(pack_id);
                 if (it != requests.end()) {
                     it->second.first.send(std::move(pack_copy));
@@ -265,6 +266,12 @@ private:
         }
         
         co_return success;
+    }
+    
+    uint64_t packet_id(uint32_t cmd, uint32_t seq) {
+        uint64_t id = cmd;
+        id = id << 31 | seq;
+        return id;
     }
 private:
     object_state state{object_state::running};
