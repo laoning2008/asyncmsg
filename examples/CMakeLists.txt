@@ -18,7 +18,7 @@ execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
             OUTPUT_VARIABLE GIT_HASH)
 message(STATUS "git hash:" ${GIT_HASH})            
-CPMAddPackage(NAME asyncmsg GITHUB_REPOSITORY laoning2008/asyncmsg GIT_TAG ${GIT_HASH})
+CPMAddPackage(NAME asyncmsg GITHUB_REPOSITORY laoning2008/asyncmsg GIT_TAG master)
 
 add_definitions(-DASYNC_MSG_ENABLE_LOGGING)
 
