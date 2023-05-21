@@ -17,7 +17,7 @@ int main(int argc, char** argv) {
         io_context.stop();
     });
 
-    auto task = [&]() -> asio::awaitable<void> {
+    auto sync_call_task = [&]() -> asio::awaitable<void> {
         add_req req;
         req.set_left(1);
         req.set_right(2);
@@ -32,13 +32,31 @@ int main(int argc, char** argv) {
                 asyncmsg::base::print_log("call add(1,2) error = " + std::to_string(result.error()));
             } else {
                 asyncmsg::base::print_log("call add(1,2) result = " + std::to_string(result.value().result()));
-
+            }
+        }
+    };
+    
+    auto async_call_task = [&]() -> asio::awaitable<void> {
+        add_req req;
+        req.set_left(1);
+        req.set_right(2);
+        
+        asio::steady_timer timer(co_await asio::this_coro::executor);
+        for (;;) {
+            timer.expires_after(std::chrono::milliseconds(100));
+            co_await timer.async_wait(asio::use_awaitable);
+            
+            auto result = co_await asyncmsg::rpc::call<add_rsp>(cli, "async_add", req);
+            if (!result) {
+                asyncmsg::base::print_log("call async_add(1,2) error = " + std::to_string(result.error()));
+            } else {
+                asyncmsg::base::print_log("call async_add(1,2) result = " + std::to_string(result.value().result()));
             }
         }
     };
 
-    asio::co_spawn(io_context, task(), asio::detached);
-    asio::co_spawn(io_context, task(), asio::detached);
+    asio::co_spawn(io_context, sync_call_task(), asio::detached);
+    asio::co_spawn(io_context, async_call_task(), asio::detached);
 
     io_context.run();
     

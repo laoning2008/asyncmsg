@@ -30,7 +30,7 @@ public:
     }
     
     ~tcp_server() {
-        base::print_log("~server bedin");
+        base::print_log("~server begin");
         asio::co_spawn(io_context, stop(), asio::detached);
         
         if (io_thread.joinable()) {
@@ -63,7 +63,6 @@ public:
                 co_await conn->stop();
             }
             
-            base::print_log("work_guard.reset");
             work_guard.reset();
             
             state = object_state::stopped;

@@ -33,23 +33,21 @@ public:
         asio::co_spawn(io_context.get_executor(), register_sync_handler_impl<REQ, RSP>(std::move(rpc_name), handler), asio::detached);
     }
     
+    template<std::derived_from<google::protobuf::Message> REQ, std::derived_from<google::protobuf::Message> RSP>
+    void register_async_handler(std::string rpc_name, std::function<asio::awaitable<rpc_result<std::unique_ptr<RSP>>>(REQ req)> handler) {
+        asio::co_spawn(io_context.get_executor(), register_async_handler_impl<REQ, RSP>(std::move(rpc_name), handler), asio::detached);
+    }
+    
     void start(uint32_t thread_num) {
         for (auto i = 0; i < thread_num; ++i) {
             workers.emplace_back([this]() {
                 io_context.run();
-                base::print_log("thread end");
             });
         }
     }
     
     void stop() {
-        auto task = [this]() {
-            base::print_log("stop task begin");
-            io_context.stop();
-            base::print_log("stop task end");
-        };
-        
-        asio::post(io_context.get_executor(), task);
+        io_context.stop();
         
         base::print_log("stop join thread begin");
         for (auto& worker : workers) {
@@ -78,6 +76,29 @@ private:
             }
 
             auto rsp_result = handler(request_message.value());
+            auto rsp_pack = detail::build_response_packet(id, req_pack, rsp_result);
+            co_await server.send_packet(rsp_pack);
+        }
+    }
+    
+    template<std::derived_from<google::protobuf::Message> REQ, std::derived_from<google::protobuf::Message> RSP>
+    asio::awaitable<void> register_async_handler_impl(std::string rpc_name, std::function<asio::awaitable<rpc_result<std::unique_ptr<RSP>>>(REQ req)> handler) {
+        auto id = detail::rpc_id(rpc_name);
+        for (;;) {
+            asyncmsg::tcp::packet req_pack = co_await server.await_request(id);
+
+            if (!req_pack.is_valid()) {
+                base::print_log("register_sync_handler_impl, invalid packet");
+                continue;
+            }
+
+            auto request_message = detail::parse_body<REQ>(req_pack);
+            if (!request_message) {
+                base::print_log("register_sync_handler_impl, parse body failed");
+                continue;
+            }
+
+            auto rsp_result = co_await handler(request_message.value());
             auto rsp_pack = detail::build_response_packet(id, req_pack, rsp_result);
             co_await server.send_packet(rsp_pack);
         }
