@@ -3,6 +3,8 @@
 #include <cassert>
 
 namespace asyncmsg {
+namespace base {
+
     class ibuffer {
     public:
         ibuffer(uint8_t* buf = nullptr, uint32_t len = 0, bool copy = false) {
@@ -22,7 +24,10 @@ namespace asyncmsg {
             copy_ = copy;
         }
         
-        ibuffer(uint32_t len) {
+        ibuffer(uint32_t len) : ibuffer(size_t(len)) {
+        }
+        
+        ibuffer(size_t len) {
             if (len > 0) {
                 buf_ = new uint8_t[len];
             }
@@ -57,11 +62,11 @@ namespace asyncmsg {
             return len_ == 0;
         }
 
-        uint8_t* buf() const {
+        uint8_t* data() const {
             return buf_;
         }
 
-        uint32_t len() const {
+        uint32_t size() const {
             return len_;
         }
     private:
@@ -69,4 +74,4 @@ namespace asyncmsg {
         uint32_t len_;
         bool copy_;
     };
-}
+}}

@@ -5,7 +5,7 @@
 #include <thread>
 
 namespace asyncmsg {
-namespace detail {
+namespace base {
 
 inline static std::string get_time_string() {
     auto now = std::chrono::system_clock::now();

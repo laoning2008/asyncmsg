@@ -179,7 +179,7 @@
 #endif
 
 namespace asyncmsg {
-namespace detail {
+namespace base {
 
 static uint16_t host_to_network_16(uint16_t x) {
     return htobe16(x);

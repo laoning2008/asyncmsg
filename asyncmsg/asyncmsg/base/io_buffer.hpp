@@ -4,7 +4,8 @@
 #include <memory>
 #include <functional>
 
-namespace bev {
+namespace asyncmsg {
+namespace base {
 
 // # IO Buffer
 //
@@ -207,4 +208,4 @@ public:
 };
 
 
-} // namespace bev
+}}

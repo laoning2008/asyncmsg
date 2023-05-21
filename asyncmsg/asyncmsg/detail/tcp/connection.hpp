@@ -16,43 +16,45 @@
 #include <asio/read.hpp>
 #include <asio/experimental/as_tuple.hpp>
 
-#include <asyncmsg/detail/io_buffer.hpp>
-#include <asyncmsg/detail/async_event.hpp>
-#include <asyncmsg/detail/oneshot.hpp>
-#include <asyncmsg/packet.hpp>
-#include <asyncmsg/detail/debug_helper.hpp>
+#include <asyncmsg/base/io_buffer.hpp>
+#include <asyncmsg/base/oneshot.hpp>
+#include <asyncmsg/tcp/packet.hpp>
+#include <asyncmsg/base/debug_helper.hpp>
 
 using namespace asio::experimental::awaitable_operators;
 constexpr auto use_nothrow_awaitable = asio::as_tuple(asio::use_awaitable);
 
-namespace asyncmsg {
+namespace asyncmsg { namespace tcp {
+namespace detail {
 
-using packet_channel = asio::experimental::channel<void(asio::error_code, asyncmsg::packet)>;
+using packet_channel = asio::experimental::channel<void(asio::error_code, tcp::packet)>;
 using received_request_channel_map = std::unordered_map<uint32_t, std::unique_ptr<packet_channel>>;
 constexpr static uint32_t received_packet_channel_size = 64;
+constexpr static uint32_t default_timeout = 5;
+constexpr static uint32_t default_tries = 3;
 
 class connection {
     constexpr static uint32_t recv_buf_size = 128*1024;
     constexpr static uint32_t active_connection_lifetime_seconds = 30;
     constexpr static uint32_t active_connection_lifetime_check_interval_seconds = 1;
-
-    using request_map_t = std::unordered_map<uint64_t, std::pair<oneshot::sender<asyncmsg::packet>, std::unique_ptr<asio::steady_timer>>>;
+    
+    using request_map_t = std::unordered_map<uint64_t, std::pair<base::sender<packet>, std::unique_ptr<asio::steady_timer>>>;
     enum class object_state {running,closed,stopping,stopped};
-
+    
 public:
     connection(asio::ip::tcp::socket socket_, std::string device_id_ = {})
     : socket(std::move(socket_))
     , device_id(std::move(device_id_))
     , last_recv_time(std::chrono::steady_clock::now())
     , received_request_channel(socket.get_executor(), received_packet_channel_size)
-    , on_disconnected(oneshot::create<void>())
+    , on_disconnected(base::create<void>())
     , check_timer(socket.get_executor())
-    , on_stopped(oneshot::create<void>()) {
+    , on_stopped(base::create<void>()) {
         start();
     }
     
     ~connection() {
-        detail::print_log("~connection");
+        base::print_log("~connection");
     }
     
     asio::awaitable<void> stop() {
@@ -71,15 +73,15 @@ public:
         
         state = object_state::stopping;
         
-        detail::print_log("wait_all_async_task_finished begin");
+        base::print_log("wait_all_async_task_finished begin");
         asio::steady_timer wait_timer(co_await asio::this_coro::executor);
         while (processing || !requests.empty()) {
-            detail::print_log(std::string("stop connection processing = ") + std::to_string(processing) + ", requests.size =" + std::to_string(requests.size()));
+            base::print_log(std::string("stop connection processing = ") + std::to_string(processing) + ", requests.size =" + std::to_string(requests.size()));
             
             wait_timer.expires_after(std::chrono::milliseconds(100));
             co_await wait_timer.async_wait(use_nothrow_awaitable);
         }
-        detail::print_log("wait_all_async_task_finished end");
+        base::print_log("wait_all_async_task_finished end");
         
         state = object_state::stopped;
         on_stopped.first.send();
@@ -91,26 +93,26 @@ public:
         }
         
         auto pack_buf = pack.packet_data();
-        auto buf = asio::buffer(pack_buf.buf(), pack_buf.len());
+        auto buf = asio::buffer(pack_buf.data(), pack_buf.size());
         co_await asio::async_write(socket, buf, use_nothrow_awaitable);
     }
     
-    asio::awaitable<packet> send_packet(packet pack, uint32_t timeout_seconds) {
+    asio::awaitable<tcp::packet> send_packet(packet pack, uint32_t timeout_seconds) {
         if (!can_work()) {
             co_return packet{};
         }
-                
+        
         auto pack_buf = pack.packet_data();
-        auto buf = asio::buffer(pack_buf.buf(), pack_buf.len());
+        auto buf = asio::buffer(pack_buf.data(), pack_buf.size());
         auto [e_write, _] = co_await asio::async_write(socket, buf, use_nothrow_awaitable);
         
         if (e_write) {
-            detail::print_log("async_write err=" + e_write.message());
+            base::print_log("async_write err=" + e_write.message());
             close();
             co_return packet{};
         }
         
-        auto [s, r] = oneshot::create<packet>();
+        auto [s, r] = base::create<packet>();
         auto id = pack.packet_cmd() << 31 | pack.packet_seq();
         
         requests.emplace(id, std::make_pair(std::move(s), std::make_unique<asio::steady_timer>(co_await asio::this_coro::executor, std::chrono::seconds(timeout_seconds))));
@@ -118,7 +120,7 @@ public:
         requests.erase(id);
         
         if (result.index() == 0) {
-            detail::print_log("send timeout");
+            base::print_log("send timeout");
             co_return packet{};
         }
         
@@ -144,7 +146,7 @@ private:
             processing = true;
             co_await(check() || receive_packet());
             processing = false;
-            detail::print_log("set processing = false");
+            base::print_log("set processing = false");
         };
         
         co_spawn(socket.get_executor(), task, asio::detached);
@@ -152,7 +154,7 @@ private:
     
     void close() {
         if (state == object_state::running) {
-            detail::print_log("close begin");
+            base::print_log("close begin");
             
             check_timer.cancel();
             for (auto& request : requests) {
@@ -168,7 +170,7 @@ private:
             
             state = object_state::closed;
             
-            detail::print_log("close end");
+            base::print_log("close end");
         }
     }
     
@@ -190,7 +192,7 @@ private:
     }
     
     asio::awaitable<void> receive_packet() {
-        bev::io_buffer recv_buffer(recv_buf_size);
+        base::io_buffer recv_buffer(recv_buf_size);
         for (;;) {
             auto size_to_read = (recv_buffer.free_size() > 0) ? recv_buffer.free_size() : recv_buffer.capacity();
             if (size_to_read <= 0) {
@@ -205,13 +207,13 @@ private:
                 close();
                 break;
             }
-
+            
             auto buf = recv_buffer.prepare(size_to_read);
             auto [e, read_size] = co_await socket.async_read_some(asio::buffer(buf.data, buf.size), use_nothrow_awaitable);
             
             if (e) {
                 close();
-                detail::print_log("read err = " + e.message());
+                base::print_log("read err = " + e.message());
                 break;
             }
             
@@ -225,11 +227,11 @@ private:
         }
     }
     
-    asio::awaitable<bool> process_packet(bev::io_buffer& recv_buffer) {
+    asio::awaitable<bool> process_packet(base::io_buffer& recv_buffer) {
         bool success = true;
         for(;;) {
             size_t consume_len = 0;
-            auto pack = asyncmsg::parse_packet(recv_buffer.read_head(), recv_buffer.size(), consume_len);
+            auto pack = asyncmsg::tcp::parse_packet(recv_buffer.read_head(), recv_buffer.size(), consume_len);
             recv_buffer.consume(consume_len);
             
             if (!pack) {
@@ -274,11 +276,12 @@ private:
     std::chrono::steady_clock::time_point last_recv_time;
     request_map_t requests;
     
-    std::pair<oneshot::sender<void>, oneshot::receiver<void>> on_disconnected;
+    std::pair<base::sender<void>, base::receiver<void>> on_disconnected;
     packet_channel received_request_channel;
     
     asio::steady_timer check_timer;
-    std::pair<oneshot::sender<void>, oneshot::receiver<void>> on_stopped;
+    std::pair<base::sender<void>, base::receiver<void>> on_stopped;
 };
 
 }
+}}

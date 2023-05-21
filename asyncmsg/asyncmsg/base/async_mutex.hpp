@@ -11,7 +11,8 @@
 #include <mutex>
 
 
-namespace asio::awaitable_ext {
+namespace asyncmsg {
+namespace base {
 
 class async_mutex_lock;
 class async_mutex;
@@ -401,6 +402,6 @@ void async_lock_initiator_base<Waiter>::operator()(Handler &&handler) {
     }
 }
 
-} // namespace detail
+} 
 
-}
+}}
