@@ -16,7 +16,7 @@ int main(int argc, char** argv) {
         return rsp;
 //        return asyncmsg::rpc::rpc_unexpected_result{100};
     });
-    
+//
     srv.register_async_handler<add_req, add_rsp>("async_add", [](add_req req) -> asio::awaitable<asyncmsg::rpc::rpc_result<std::unique_ptr<add_rsp>>> {
     
         auto rsp = std::make_unique<add_rsp>();
