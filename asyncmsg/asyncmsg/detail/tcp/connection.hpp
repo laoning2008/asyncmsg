@@ -256,6 +256,8 @@ private:
             if (pack_copy.is_response()) {
                 uint64_t pack_id = packet_id(pack_copy.packet_cmd(), pack_copy.packet_seq());
                 
+//                base::print_log("recv rsp cmd = " + std::to_string(pack_copy.packet_cmd()) + ", seq = " + std::to_string(pack_copy.packet_seq()));
+                
                 auto it = requests.find(pack_id);
                 if (it != requests.end()) {
                     it->second.first.send(std::move(pack_copy));

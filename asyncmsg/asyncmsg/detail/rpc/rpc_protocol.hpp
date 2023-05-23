@@ -43,9 +43,11 @@ tcp::packet build_response_packet(uint32_t id, const tcp::packet& req_packet, rp
 }
 
 template<std::derived_from<google::protobuf::Message> RSP>
-tcp::packet build_response_packet(uint32_t id, const tcp::packet& req_packet, rpc_result<std::unique_ptr<RSP>>& rsp_message) {
+tcp::packet build_response_packet(const tcp::packet& req_packet, rpc_result<std::unique_ptr<RSP>>& rsp_message) {
+//    base::print_log("build_response_packet id = " + std::to_string(id));
+    
     if (!rsp_message) {
-        return asyncmsg::tcp::build_rsp_packet(id, req_packet.packet_seq(), rsp_message.error(), req_packet.packet_device_id());
+        return asyncmsg::tcp::build_rsp_packet(req_packet.packet_cmd(), req_packet.packet_seq(), rsp_message.error(), req_packet.packet_device_id());
     }
     
     auto& proto_message = rsp_message.value();
@@ -53,7 +55,7 @@ tcp::packet build_response_packet(uint32_t id, const tcp::packet& req_packet, rp
     asyncmsg::base::ibuffer body{size};
     proto_message->SerializeToArray(body.data(), (int)size);
     
-    return asyncmsg::tcp::build_rsp_packet(id, req_packet.packet_seq(), 0, req_packet.packet_device_id(), body.data(), body.size());
+    return asyncmsg::tcp::build_rsp_packet(req_packet.packet_cmd(), req_packet.packet_seq(), 0, req_packet.packet_device_id(), body.data(), body.size());
 }
 
 
