@@ -15,7 +15,6 @@
 
 #include <asyncmsg/detail/tcp/connection.hpp>
 #include <asyncmsg/base/debug_helper.hpp>
-
 #include <format>
 
 namespace asyncmsg { namespace tcp {
@@ -29,7 +28,8 @@ public:
     : work_guard(io_context.get_executor()), device_id(std::move(device_id_))
     , server_host(std::move(host)), server_port(port)
     , connect_timer(io_context.get_executor())
-    , on_stopped(asyncmsg::base::create<void>()) {
+    , on_stopped(base::create<void>())
+    , on_connection_should_stopped(base::create<void>()) {
         io_thread = std::thread([this]() {
             io_context.run();
         });
@@ -68,13 +68,10 @@ public:
             for (auto& chan : received_request_channels) {
                 chan.second->cancel();
             }
-            
-            if (conn) {
-                co_await conn->stop();
-            }
   
-            base::print_log("set conn = nullptr");
-            conn = nullptr;
+            on_connection_should_stopped.first.send();
+//            base::print_log("set conn = nullptr");
+//            conn = nullptr;
             
             base::print_log("work_guard.reset");
             work_guard.reset();
@@ -101,7 +98,9 @@ public:
                 co_return;
             }
             
-            co_return co_await conn->send_packet(pack);
+            is_sending_without_try = true;
+            co_await conn->send_packet(pack);
+            is_sending_without_try = false;
         };
 
         co_return co_await asio::co_spawn(io_context.get_executor(), task(pack), asio::use_awaitable);
@@ -136,9 +135,12 @@ public:
                     continue;
                 }
                                 
+                is_sending_with_try = true;
                 auto rsp_pack = co_await conn->send_packet(pack, timeout_seconds);
+                is_sending_with_try = false;
                 
                 if (rsp_pack.is_valid()) {
+                    pending_send_timers.remove(timer);
                     co_return rsp_pack;
                 }
             }
@@ -172,6 +174,10 @@ private:
         return state == object_state::running;
     }
     
+    bool is_safe_to_remove_connection() {
+        return !is_sending_with_try && !is_sending_without_try;
+    }
+    
     asio::awaitable<void> start() {
         while (can_work()) {
             co_await connect();
@@ -185,22 +191,28 @@ private:
             }
             
             for (;;) {
-                auto result = co_await(conn->request_received() || conn->connection_disconnected());
+                auto result = co_await(conn->request_received() || conn->connection_disconnected() || on_connection_should_stopped.second.async_wait(use_nothrow_awaitable));
                 
                 if (result.index() == 0) {
                     packet pack(std::get<0>(result));
+                    if (!pack.is_valid()) {
+                        base::print_log("rec invalid pack, exit connecion");
+                        break;
+                    }
+                    
                     auto it = received_request_channels.find(pack.packet_cmd());
                     if (it != received_request_channels.end()) {
                         co_await it->second->async_send(asio::error_code{}, pack, use_nothrow_awaitable);
                     }
                 } else {
-                    base::print_log("stop conn begin2");
-                    co_await conn->stop();
-                    base::print_log("stop conn end2");
-                    conn = nullptr;
+                    base::print_log("connection break");
                     break;
                 }
             }
+            
+            base::print_log("stop conn begin2");
+            co_await conn->stop();
+            base::print_log("stop conn end2");
         }
         
         base::print_log("start() exit");
@@ -219,6 +231,11 @@ private:
         auto [e_connect, endpoint] = co_await asio::async_connect(socket, endpoints, use_nothrow_awaitable);
         base::print_log("async_connect end");
         if (!e_connect) {
+            asio::steady_timer timer(io_context.get_executor(), std::chrono::milliseconds(100));
+            while (!is_safe_to_remove_connection()) {
+                co_await timer.async_wait(use_nothrow_awaitable);
+            }
+            
             conn = std::make_unique<detail::connection>(std::move(socket), device_id);
         }
     }
@@ -249,6 +266,10 @@ private:
     list_timer pending_send_timers;
     
     std::pair<base::sender<void>, base::receiver<void>> on_stopped;
+    std::pair<base::sender<void>, base::receiver<void>> on_connection_should_stopped;
+    
+    bool is_sending_without_try{false};
+    bool is_sending_with_try{false};
 };
 
 }}

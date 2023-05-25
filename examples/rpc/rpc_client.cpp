@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
         
         asio::steady_timer timer(co_await asio::this_coro::executor);
         for (;;) {
-            timer.expires_after(std::chrono::milliseconds(1000));
+            timer.expires_after(std::chrono::milliseconds(1));
             co_await timer.async_wait(asio::use_awaitable);
             
             auto result = co_await asyncmsg::rpc::call<add_rsp>(cli, "async_add", req);
@@ -55,11 +55,11 @@ int main(int argc, char** argv) {
         }
     };
 
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < 200; ++i) {
         asio::co_spawn(io_context, sync_call_task(), asio::detached);
     }
     
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < 200; ++i) {
         asio::co_spawn(io_context, async_call_task(), asio::detached);
     }
 

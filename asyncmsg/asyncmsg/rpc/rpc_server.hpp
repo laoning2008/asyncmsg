@@ -57,6 +57,9 @@ public:
     void stop() {
         auto task = [this]() -> asio::awaitable<void> {
             work_guard.reset();
+            
+            co_await server.cancel_all_await_request();
+            
             for (auto& signal : handler_exit_signals) {
                 signal.send();
             }
@@ -65,6 +68,7 @@ public:
                 co_await worker_mutex.async_lock(use_nothrow_awaitable);
                 asyncmsg::base::async_mutex_lock l(worker_mutex, std::adopt_lock_t{});
                 for (auto& signal : worker_exit_signals) {
+                    base::print_log("send worker exit signal");
                     signal.second.send();
                 }
             }
@@ -94,9 +98,9 @@ private:
             
             auto req_pack = std::get<1>(wait_result);
 
-            if (!req_pack.is_valid()) {
+            if (!req_pack.is_valid()) {//exit
                 base::print_log("register_sync_handler_impl, invalid packet");
-                continue;
+                break;
             }
 
             auto request_message = detail::parse_body<REQ>(req_pack);
@@ -106,7 +110,7 @@ private:
             }
 
             auto rsp_result = handler(request_message.value());
-            auto rsp_pack = detail::build_response_packet(id, req_pack, rsp_result);
+            auto rsp_pack = detail::build_response_packet(req_pack, rsp_result);
             co_await server.send_packet(rsp_pack);
         }
     }
@@ -136,24 +140,25 @@ private:
                 continue;
             }
 
-            auto worer_id = ++cur_worker_id;
+            auto worker_id = ++cur_worker_id;
             auto [s, r] = base::create<void>();
             {
                 co_await worker_mutex.async_lock(use_nothrow_awaitable);
                 asyncmsg::base::async_mutex_lock l(worker_mutex, std::adopt_lock_t{});
-                worker_exit_signals[worer_id] = std::move(s);
+                worker_exit_signals[worker_id] = std::move(s);
             }
             
             
-            auto worker = [this, handler, id, worer_id](tcp::packet req_pack, REQ request_message, base::receiver<void> exit_signal) -> asio::awaitable<void> {
-//                base::print_log("recv req2 cmd = " + std::to_string(req_pack.packet_cmd()) + ", seq = " + std::to_string(req_pack.packet_seq()) + ", id = " + std::to_string(id));
+            auto worker = [this, handler](tcp::packet req_pack, REQ request_message, base::receiver<void> exit_signal, uint64_t worker_id) -> asio::awaitable<void> {
+//                base::print_log("recv req2 cmd = " + std::to_string(req_pack.packet_cmd()) + ", seq = " + std::to_string(req_pack.packet_seq()));
 
                 auto rsp_result = co_await (exit_signal.async_wait(use_nothrow_awaitable) || handler(request_message));
                 
                 {
                     co_await worker_mutex.async_lock(use_nothrow_awaitable);
                     asyncmsg::base::async_mutex_lock l(worker_mutex, std::adopt_lock_t{});
-                    worker_exit_signals.erase(worer_id);
+                    worker_exit_signals.erase(worker_id);
+//                    base::print_log("remove worker_exit_signals, workerid = " + std::to_string(worker_id));
                 }
                 
                 if (rsp_result.index() == 0) {
@@ -169,7 +174,7 @@ private:
             };
             
             auto req_msg = request_message.value();
-            asio::co_spawn(io_context.get_executor(), worker(req_pack, req_msg, std::move(r)), asio::detached);
+            asio::co_spawn(io_context.get_executor(), worker(req_pack, req_msg, std::move(r), worker_id), asio::detached);
         }
     }
 private:
@@ -184,8 +189,6 @@ private:
     asyncmsg::base::async_mutex worker_mutex;
     std::unordered_map<uint64_t, base::sender<void>> worker_exit_signals;
     std::atomic<uint64_t> cur_worker_id{0};
-    
-    
 };
 
 }}

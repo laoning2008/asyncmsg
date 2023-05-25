@@ -17,16 +17,15 @@
 #include <asio/experimental/as_tuple.hpp>
 
 #include <asyncmsg/base/io_buffer.hpp>
-#include <asyncmsg/base/oneshot.hpp>
 #include <asyncmsg/tcp/packet.hpp>
 #include <asyncmsg/base/debug_helper.hpp>
+#include <asyncmsg/base/oneshot.hpp>
 
 using namespace asio::experimental::awaitable_operators;
 constexpr auto use_nothrow_awaitable = asio::as_tuple(asio::use_awaitable);
 
 namespace asyncmsg { namespace tcp {
 namespace detail {
-
 using packet_channel = asio::experimental::channel<void(asio::error_code, tcp::packet)>;
 using received_request_channel_map = std::unordered_map<uint32_t, std::unique_ptr<packet_channel>>;
 constexpr static uint32_t received_packet_channel_size = 64;
@@ -35,11 +34,11 @@ constexpr static uint32_t default_tries = 3;
 
 class connection {
     constexpr static uint32_t recv_buf_size = 128*1024;
-    constexpr static uint32_t active_connection_lifetime_seconds = 30;
+    constexpr static uint32_t active_connection_lifetime_seconds = 60;
     constexpr static uint32_t active_connection_lifetime_check_interval_seconds = 1;
     
-    using request_map_t = std::unordered_map<uint64_t, std::pair<base::sender<packet>, std::unique_ptr<asio::steady_timer>>>;
-    enum class object_state {running,closed,stopping,stopped};
+    using request_map_t = std::unordered_map<uint64_t, std::pair<std::unique_ptr<packet_channel>, std::unique_ptr<asio::steady_timer>>>;
+    enum class object_state {running,stopping,stopped};
     
 public:
     connection(asio::ip::tcp::socket socket_, std::string device_id_ = {})
@@ -48,8 +47,8 @@ public:
     , last_recv_time(std::chrono::steady_clock::now())
     , received_request_channel(socket.get_executor(), received_packet_channel_size)
     , on_disconnected(base::create<void>())
-    , check_timer(socket.get_executor())
-    , on_stopped(base::create<void>()) {
+    , on_stopped(base::create<void>())
+    , check_timer(socket.get_executor()) {
         start();
     }
     
@@ -63,7 +62,9 @@ public:
         }
         
         if (state == object_state::stopping) {
+            base::print_log("already stopping, wait for stopped signal begin");
             co_await on_stopped.second.async_wait(use_nothrow_awaitable);
+            base::print_log("already stopping, wait for stopped signal end");
             co_return;
         }
         
@@ -84,7 +85,9 @@ public:
         base::print_log("wait_all_async_task_finished end");
         
         state = object_state::stopped;
+        base::print_log("send stopped signal begin");
         on_stopped.first.send();
+        base::print_log("send stopped signal end");
     }
     
     asio::awaitable<void> send_packet(packet pack) {
@@ -112,20 +115,21 @@ public:
             co_return packet{};
         }
         
-        auto [s, r] = base::create<packet>();
+        auto chan = std::make_unique<packet_channel>(socket.get_executor(), 1);
         uint64_t id = packet_id(pack.packet_cmd(), pack.packet_seq());
-        
-        requests.emplace(id, std::make_pair(std::move(s), std::make_unique<asio::steady_timer>(co_await asio::this_coro::executor, std::chrono::seconds(timeout_seconds))));
-        auto result = co_await(requests[id].second->async_wait(use_nothrow_awaitable) || r.async_wait(use_nothrow_awaitable));
+
+        requests.emplace(id, std::make_pair(std::move(chan), std::make_unique<asio::steady_timer>(co_await asio::this_coro::executor, std::chrono::seconds(timeout_seconds))));
+
+        auto result = co_await(requests[id].second->async_wait(use_nothrow_awaitable) || requests[id].first->async_receive(use_nothrow_awaitable));
         requests.erase(id);
-        
+
         if (result.index() == 0) {
             base::print_log("send timeout");
             co_return packet{};
         }
-        
-        auto [e_wait] = std::get<1>(result);
-        co_return e_wait ? packet{} : r.get();
+
+        auto [e_wait, pack_rsp] = std::get<1>(result);
+        co_return e_wait ? packet{} : pack_rsp;
     }
     
     asio::awaitable<packet> request_received() {
@@ -153,23 +157,24 @@ private:
     }
     
     void close() {
-        if (state == object_state::running) {
+        if (!has_close) {
+            has_close = true;
             base::print_log("close begin");
             
+            asio::error_code ec;
+            socket.cancel();
+            socket.shutdown(asio::socket_base::shutdown_both, ec);
+            socket.close(ec);
+            
             check_timer.cancel();
+            
             for (auto& request : requests) {
                 request.second.second->cancel();
             }
             
             received_request_channel.cancel();
-            
-            asio::error_code ec;
-            socket.close(ec);
-            
+                        
             on_disconnected.first.send();
-            
-            state = object_state::closed;
-            
             base::print_log("close end");
         }
     }
@@ -181,10 +186,11 @@ private:
     asio::awaitable<void> check() {
         for (;;) {
             check_timer.expires_after(std::chrono::seconds(active_connection_lifetime_check_interval_seconds));
-            co_await check_timer.async_wait(use_nothrow_awaitable);
+            auto [e] = co_await check_timer.async_wait(use_nothrow_awaitable);
             
             auto now = std::chrono::steady_clock::now();
-            if (std::chrono::duration_cast<std::chrono::seconds>(now - last_recv_time).count() > active_connection_lifetime_seconds) {
+            if (e || (std::chrono::duration_cast<std::chrono::seconds>(now - last_recv_time).count() > active_connection_lifetime_seconds)) {
+                base::print_log("connection timeout");
                 close();
                 break;
             }
@@ -260,10 +266,12 @@ private:
                 
                 auto it = requests.find(pack_id);
                 if (it != requests.end()) {
-                    it->second.first.send(std::move(pack_copy));
+                    co_await it->second.first->async_send(asio::error_code{}, std::move(pack_copy), use_nothrow_awaitable);
                 }
             } else {
-                co_await received_request_channel.async_send({}, std::move(pack_copy), use_nothrow_awaitable);
+                if (received_request_channel.is_open()) {
+                    co_await received_request_channel.async_send({}, std::move(pack_copy), use_nothrow_awaitable);
+                }
             }
         }
         
@@ -285,11 +293,13 @@ private:
     std::chrono::steady_clock::time_point last_recv_time;
     request_map_t requests;
     
-    std::pair<base::sender<void>, base::receiver<void>> on_disconnected;
     packet_channel received_request_channel;
+    std::pair<base::sender<void>, base::receiver<void>> on_stopped;
+    std::pair<base::sender<void>, base::receiver<void>> on_disconnected;
     
     asio::steady_timer check_timer;
-    std::pair<base::sender<void>, base::receiver<void>> on_stopped;
+    
+    std::atomic<bool> has_close{false};
 };
 
 }

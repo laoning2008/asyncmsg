@@ -20,17 +20,27 @@ int main(int argc, char** argv) {
                 continue;
             }
             
-            asyncmsg::base::print_log(std::string("recv req, data = ") + (char*)(req_pack.packet_body().data()));
+//            asyncmsg::base::print_log(std::string("recv req, data = ") + (char*)(req_pack.packet_body().data()));
             
             uint8_t data[] = {'w', 'o', 'r', 'l', 'd', '\0'};
             auto rsp_pack = asyncmsg::tcp::build_rsp_packet(req_pack.packet_cmd(), req_pack.packet_seq(), 0, req_pack.packet_device_id(), data, sizeof(data));
  
             co_await srv.send_packet(rsp_pack);
-            asyncmsg::base::print_log(std::string("send rsp, data = ") + (char*)data);
+//            asyncmsg::base::print_log(std::string("send rsp, data = ") + (char*)data);
         }
     };
     
     asio::co_spawn(io_context, task(), asio::detached);
+    
+    
+//    auto exit_task = [&]() ->asio::awaitable<void> {
+//        asio::steady_timer timer(io_context.get_executor());
+//        timer.expires_after(std::chrono::milliseconds(15*1000));
+//        co_await timer.async_wait(asio::use_awaitable);
+//        io_context.stop();
+//    };
+//    asio::co_spawn(io_context.get_executor(), exit_task, asio::detached);
+    
     
     io_context.run();
 

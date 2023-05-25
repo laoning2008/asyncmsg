@@ -1,3 +1,4 @@
+//#define ASIO_ENABLE_HANDLER_TRACKING 1
 #include <asyncmsg.hpp>
 #include <asyncmsg/rpc/rpc_server.hpp>
 #include <asio.hpp>
@@ -31,14 +32,6 @@ int main(int argc, char** argv) {
         io_context.stop();
     });
     
-    
-    auto exit_task = [&]() ->asio::awaitable<void> {
-        asio::steady_timer timer(io_context.get_executor());
-        timer.expires_after(std::chrono::milliseconds(100));
-        co_await timer.async_wait(asio::use_awaitable);
-        io_context.stop();
-    };
-//    asio::co_spawn(io_context.get_executor(), exit_task, asio::detached);
 
     io_context.run();
     return 0;

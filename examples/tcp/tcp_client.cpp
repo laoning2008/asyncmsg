@@ -17,7 +17,7 @@ int main(int argc, char** argv) {
     auto task = [&]() -> asio::awaitable<void> {
         asio::steady_timer timer(co_await asio::this_coro::executor);
         for (;;) {
-            timer.expires_after(std::chrono::milliseconds(100));
+            timer.expires_after(std::chrono::milliseconds(1));
             co_await timer.async_wait(asio::use_awaitable);
 
             uint8_t data[] = {'h', 'e', 'l', 'l', 'o', '\0'};
@@ -34,8 +34,9 @@ int main(int argc, char** argv) {
         }
     };
 
-    asio::co_spawn(io_context, task(), asio::detached);
-    asio::co_spawn(io_context, task(), asio::detached);
+    for (int i = 0; i < 1000; ++i) {
+        asio::co_spawn(io_context, task(), asio::detached);
+    }
 
     io_context.run();
     
