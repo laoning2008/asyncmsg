@@ -19,13 +19,13 @@
 #include <asyncmsg/base/io_buffer.hpp>
 #include <asyncmsg/tcp/packet.hpp>
 #include <asyncmsg/base/debug_helper.hpp>
-#include <asyncmsg/base/oneshot.hpp>
 
 using namespace asio::experimental::awaitable_operators;
 constexpr auto use_nothrow_awaitable = asio::as_tuple(asio::use_awaitable);
 
 namespace asyncmsg { namespace tcp {
 namespace detail {
+using signal_channel = asio::experimental::channel<void(asio::error_code)>;
 using packet_channel = asio::experimental::channel<void(asio::error_code, tcp::packet)>;
 using received_request_channel_map = std::unordered_map<uint32_t, std::unique_ptr<packet_channel>>;
 constexpr static uint32_t received_packet_channel_size = 64;
@@ -41,14 +41,15 @@ class connection {
     enum class object_state {running,stopping,stopped};
     
 public:
-    connection(asio::ip::tcp::socket socket_, std::string device_id_ = {})
-    : socket(std::move(socket_))
+    connection(asio::io_context::executor_type executor_, asio::ip::tcp::socket socket_, std::string device_id_ = {})
+    : executor(executor_)
+    ,socket(std::move(socket_))
     , device_id(std::move(device_id_))
     , last_recv_time(std::chrono::steady_clock::now())
-    , received_request_channel(socket.get_executor(), received_packet_channel_size)
-    , on_disconnected(base::create<void>())
-    , on_stopped(base::create<void>())
-    , check_timer(socket.get_executor()) {
+    , received_request_channel(executor, received_packet_channel_size)
+    , on_disconnected(executor, 1)
+    , on_stopped(executor, 1)
+    , check_timer(executor) {
         start();
     }
     
@@ -63,13 +64,13 @@ public:
         
         if (state == object_state::stopping) {
             base::print_log("already stopping, wait for stopped signal begin");
-            co_await on_stopped.second.async_wait(use_nothrow_awaitable);
+            co_await on_stopped.async_receive(use_nothrow_awaitable);
             base::print_log("already stopping, wait for stopped signal end");
             co_return;
         }
         
         if (state == object_state::running) {
-            close();
+            co_await close();
         }
         
         state = object_state::stopping;
@@ -86,7 +87,7 @@ public:
         
         state = object_state::stopped;
         base::print_log("send stopped signal begin");
-        on_stopped.first.send();
+        co_await on_stopped.async_send(asio::error_code{}, use_nothrow_awaitable);
         base::print_log("send stopped signal end");
     }
     
@@ -111,11 +112,11 @@ public:
         
         if (e_write) {
             base::print_log("async_write err=" + e_write.message());
-            close();
+            co_await close();
             co_return packet{};
         }
         
-        auto chan = std::make_unique<packet_channel>(socket.get_executor(), 1);
+        auto chan = std::make_unique<packet_channel>(executor, 1);
         uint64_t id = packet_id(pack.packet_cmd(), pack.packet_seq());
 
         requests.emplace(id, std::make_pair(std::move(chan), std::make_unique<asio::steady_timer>(co_await asio::this_coro::executor, std::chrono::seconds(timeout_seconds))));
@@ -138,7 +139,7 @@ public:
     }
     
     asio::awaitable<void> connection_disconnected() {
-        co_await on_disconnected.second.async_wait(use_nothrow_awaitable);
+        co_await on_disconnected.async_receive(use_nothrow_awaitable);
     }
     
     std::string get_device_id() {
@@ -148,18 +149,28 @@ private:
     void start() {
         auto task = [this]() -> asio::awaitable<void> {
             processing = true;
-            co_await(check() || receive_packet());
+            co_await(check() && receive_packet());
             processing = false;
             base::print_log("set processing = false");
         };
         
-        co_spawn(socket.get_executor(), task, asio::detached);
+        co_spawn(executor, task, asio::detached);
     }
     
-    void close() {
+    asio::awaitable<void> close() {
         if (!has_close) {
             has_close = true;
             base::print_log("close begin");
+            
+            //need to be early, before check_timer.cancel()
+            co_await on_disconnected.async_send(asio::error_code{}, use_nothrow_awaitable);
+            on_disconnected.cancel();
+
+            for (auto& request : requests) {
+                request.second.second->cancel();
+            }
+            
+            received_request_channel.cancel();
             
             asio::error_code ec;
             socket.cancel();
@@ -167,14 +178,6 @@ private:
             socket.close(ec);
             
             check_timer.cancel();
-            
-            for (auto& request : requests) {
-                request.second.second->cancel();
-            }
-            
-            received_request_channel.cancel();
-                        
-            on_disconnected.first.send();
             base::print_log("close end");
         }
     }
@@ -191,7 +194,7 @@ private:
             auto now = std::chrono::steady_clock::now();
             if (e || (std::chrono::duration_cast<std::chrono::seconds>(now - last_recv_time).count() > active_connection_lifetime_seconds)) {
                 base::print_log("connection timeout");
-                close();
+                co_await close();
                 break;
             }
         }
@@ -203,14 +206,14 @@ private:
             auto size_to_read = (recv_buffer.free_size() > 0) ? recv_buffer.free_size() : recv_buffer.capacity();
             if (size_to_read <= 0) {
                 if (! co_await process_packet(recv_buffer)) {
-                    close();
+                    co_await close();
                     break;
                 }
             }
             
             size_to_read = (recv_buffer.free_size() > 0) ? recv_buffer.free_size() : recv_buffer.capacity();
             if (size_to_read <= 0) {
-                close();
+                co_await close();
                 break;
             }
             
@@ -218,7 +221,7 @@ private:
             auto [e, read_size] = co_await socket.async_read_some(asio::buffer(buf.data, buf.size), use_nothrow_awaitable);
             
             if (e) {
-                close();
+                co_await close();
                 base::print_log("read err = " + e.message());
                 break;
             }
@@ -226,7 +229,7 @@ private:
             if (read_size > 0) {
                 recv_buffer.commit(read_size);
                 if (! co_await process_packet(recv_buffer)) {
-                    close();
+                    co_await close();
                     break;
                 }
             }
@@ -287,6 +290,7 @@ private:
     object_state state{object_state::running};
     volatile bool processing{false};
     
+    asio::io_context::executor_type executor;
     asio::ip::tcp::socket socket;
     std::string device_id;
     
@@ -294,8 +298,8 @@ private:
     request_map_t requests;
     
     packet_channel received_request_channel;
-    std::pair<base::sender<void>, base::receiver<void>> on_stopped;
-    std::pair<base::sender<void>, base::receiver<void>> on_disconnected;
+    signal_channel on_stopped;
+    signal_channel on_disconnected;
     
     asio::steady_timer check_timer;
     

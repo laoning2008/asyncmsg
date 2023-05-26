@@ -237,7 +237,7 @@ class shared_state {
 
                                 if (prev == waiting) {
                                     this->wait_op_->complete(errc::cancelled);
-                                    this->wait_op_ = nullptr;
+//                                    this->wait_op_ = nullptr;
                                 }
                                 else // prev has been sent or detached(sender)
                                 {

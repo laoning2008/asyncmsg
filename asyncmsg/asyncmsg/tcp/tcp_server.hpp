@@ -18,13 +18,13 @@
 namespace asyncmsg { namespace tcp {
 
 class tcp_server final {
-    using connection_map = std::unordered_map<uint32_t, std::pair<std::unique_ptr<detail::connection>, base::sender<void>>>;
+    using connection_map = std::unordered_map<uint32_t, std::pair<std::unique_ptr<detail::connection>, std::unique_ptr<detail::signal_channel>>>;
     enum class object_state {running,stopping,stopped};
 public:
     tcp_server(uint16_t port_)
     : work_guard(io_context.get_executor())
     , acceptor(io_context.get_executor(), {asio::ip::tcp::v4(), port_})
-    , on_stopped(base::create<void>()) {
+    , on_stopped(io_context.get_executor(), 1) {
         io_thread = std::thread([this]() {
             io_context.run();
         });
@@ -51,7 +51,7 @@ public:
             }
             
             if (state == object_state::stopping) {
-                co_await on_stopped.second.async_wait(use_nothrow_awaitable);
+                co_await on_stopped.async_receive(use_nothrow_awaitable);
                 base::print_log("tcp server stopped2");
                 co_return;
             }
@@ -66,13 +66,13 @@ public:
             }
             
             for (auto& conn : connections) {
-                conn.second.second.send();
+                co_await conn.second.second->async_send(asio::error_code{}, use_nothrow_awaitable);
             }
             
             work_guard.reset();
             
             state = object_state::stopped;
-            on_stopped.first.send();
+            co_await on_stopped.async_send(asio::error_code{}, use_nothrow_awaitable);
             base::print_log("tcp server stop end");
         };
 
@@ -189,7 +189,7 @@ private:
         }
     }
     
-    asio::awaitable<packet> start() {
+    asio::awaitable<void> start() {
         while (can_work()) {
             auto [e, socket] = co_await acceptor.async_accept(use_nothrow_awaitable);
             if (e) {
@@ -202,12 +202,11 @@ private:
     }
     
     asio::awaitable<void> handle_connection(asio::ip::tcp::socket socket) {
-        auto [s, r] = base::create<void>();
         auto cur_conn_id = ++connection_id;
-        connections[cur_conn_id] = std::make_pair(std::make_unique<detail::connection>(std::move(socket)), std::move(s));
+        connections[cur_conn_id] = std::make_pair(std::make_unique<detail::connection>(io_context.get_executor(), std::move(socket)), std::make_unique<detail::signal_channel>(io_context.get_executor(), 1));
                 
         while (can_work()) {
-            auto result = co_await(connections[cur_conn_id].first->request_received() || connections[cur_conn_id].first->connection_disconnected() || r.async_wait(use_nothrow_awaitable));
+            auto result = co_await(connections[cur_conn_id].first->request_received() || connections[cur_conn_id].first->connection_disconnected() || connections[cur_conn_id].second->async_receive(use_nothrow_awaitable));
                                     
             if (result.index() == 0) {
                 packet pack(std::get<0>(std::move(result)));
@@ -250,7 +249,7 @@ private:
     detail::received_request_channel_map received_request_channels;
     connection_map connections;
     
-    std::pair<base::sender<void>, base::receiver<void>> on_stopped;
+    detail::signal_channel on_stopped;
     std::atomic<uint32_t> connection_id{0};
     std::set<uint32_t> to_remove_connections;
     

@@ -28,8 +28,8 @@ public:
     : work_guard(io_context.get_executor()), device_id(std::move(device_id_))
     , server_host(std::move(host)), server_port(port)
     , connect_timer(io_context.get_executor())
-    , on_stopped(base::create<void>())
-    , on_connection_should_stopped(base::create<void>()) {
+    , on_stopped(io_context.get_executor(), 1)
+    , on_connection_should_stopped(io_context.get_executor(), 1) {
         io_thread = std::thread([this]() {
             io_context.run();
         });
@@ -53,7 +53,7 @@ public:
             }
             
             if (state == object_state::stopping) {
-                co_await on_stopped.second.async_wait(use_nothrow_awaitable);
+                co_await on_stopped.async_receive(use_nothrow_awaitable);
                 co_return;
             }
             
@@ -69,15 +69,13 @@ public:
                 chan.second->cancel();
             }
   
-            on_connection_should_stopped.first.send();
-//            base::print_log("set conn = nullptr");
-//            conn = nullptr;
+            co_await on_connection_should_stopped.async_send(asio::error_code{}, use_nothrow_awaitable);
             
             base::print_log("work_guard.reset");
             work_guard.reset();
             
             state = object_state::stopped;
-            on_stopped.first.send();
+            co_await on_stopped.async_send(asio::error_code{}, use_nothrow_awaitable);
         };
 
         co_return co_await asio::co_spawn(io_context.get_executor(), task(), asio::use_awaitable);
@@ -129,7 +127,7 @@ public:
                 }
                 
                 if (!conn) {
-                    base::print_log(" send_packet--conn==nullptr");
+                    //base::print_log(" send_packet--conn==nullptr");
                     timer->expires_after(std::chrono::seconds(timeout_seconds));
                     co_await timer->async_wait(use_nothrow_awaitable);
                     continue;
@@ -191,7 +189,7 @@ private:
             }
             
             for (;;) {
-                auto result = co_await(conn->request_received() || conn->connection_disconnected() || on_connection_should_stopped.second.async_wait(use_nothrow_awaitable));
+                auto result = co_await(conn->request_received() || conn->connection_disconnected() || on_connection_should_stopped.async_receive(use_nothrow_awaitable));
                 
                 if (result.index() == 0) {
                     packet pack(std::get<0>(result));
@@ -219,6 +217,13 @@ private:
     }
     
     asio::awaitable<void> connect() {
+        asio::steady_timer timer(io_context.get_executor(), std::chrono::milliseconds(100));
+        while (!is_safe_to_remove_connection()) {
+            co_await timer.async_wait(use_nothrow_awaitable);
+        }
+        conn = nullptr;
+        
+        
         asio::ip::tcp::resolver resolver(io_context);
         auto [e_resolver, endpoints] = co_await resolver.async_resolve(server_host, std::to_string(server_port), use_nothrow_awaitable);
         if (e_resolver) {
@@ -231,12 +236,7 @@ private:
         auto [e_connect, endpoint] = co_await asio::async_connect(socket, endpoints, use_nothrow_awaitable);
         base::print_log("async_connect end");
         if (!e_connect) {
-            asio::steady_timer timer(io_context.get_executor(), std::chrono::milliseconds(100));
-            while (!is_safe_to_remove_connection()) {
-                co_await timer.async_wait(use_nothrow_awaitable);
-            }
-            
-            conn = std::make_unique<detail::connection>(std::move(socket), device_id);
+            conn = std::make_unique<detail::connection>(io_context.get_executor(), std::move(socket), device_id);
         }
     }
     
@@ -265,8 +265,8 @@ private:
     
     list_timer pending_send_timers;
     
-    std::pair<base::sender<void>, base::receiver<void>> on_stopped;
-    std::pair<base::sender<void>, base::receiver<void>> on_connection_should_stopped;
+    detail::signal_channel on_stopped;
+    detail::signal_channel on_connection_should_stopped;
     
     bool is_sending_without_try{false};
     bool is_sending_with_try{false};
