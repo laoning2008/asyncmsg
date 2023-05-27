@@ -149,7 +149,7 @@ private:
     void start() {
         auto task = [this]() -> asio::awaitable<void> {
             processing = true;
-            co_await(check() && receive_packet());
+            co_await(check() || receive_packet());
             processing = false;
             base::print_log("set processing = false");
         };

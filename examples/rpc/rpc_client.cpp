@@ -11,7 +11,7 @@ int main(int argc, char** argv) {
 
     std::string device_id = "test_device_id";
 
-    asyncmsg::tcp::tcp_client cli{"localhost", 5555, device_id};
+    asyncmsg::tcp::tcp_client cli{"localhost", 5556, device_id};
 
     signals.async_wait([&](auto, auto) {
         io_context.stop();

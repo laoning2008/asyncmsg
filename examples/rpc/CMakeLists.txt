@@ -11,8 +11,6 @@ target_include_directories(rpc_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../
 
 set_target_properties(rpc_server PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set_target_properties(rpc_client PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-set_target_properties(rpc_server PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Release>:Release>")
-set_target_properties(rpc_client PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Release>:Release>")
 
 set_target_properties(rpc_server PROPERTIES FOLDER "examples")
 set_target_properties(rpc_client PROPERTIES FOLDER "examples")

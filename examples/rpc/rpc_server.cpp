@@ -9,7 +9,7 @@ int main(int argc, char** argv) {
     asio::io_context io_context(std::thread::hardware_concurrency());
     asio::signal_set signals(io_context, SIGINT, SIGTERM);
 
-    auto srv = asyncmsg::rpc::rpc_server{5555};
+    auto srv = asyncmsg::rpc::rpc_server{5556};
     
     srv.register_sync_handler<add_req, add_rsp>("add", [](add_req req) -> asyncmsg::rpc::rpc_result<add_rsp> {
         add_rsp rsp;
