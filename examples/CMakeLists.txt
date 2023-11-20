@@ -6,17 +6,11 @@ set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 project(asyncmsg_examples CXX)
-
-include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/CPM.cmake)
-CPMAddPackage(NAME asio GITHUB_REPOSITORY chriskohlhoff/asio GIT_TAG asio-1-28-0)
-CPMAddPackage(NAME protobuf GITHUB_REPOSITORY protocolbuffers/protobuf GIT_TAG v23.1 
-            OPTIONS "protobuf_INSTALL ON" "protobuf_BUILD_TESTS OFF"
-            "protobuf_BUILD_PROTOC_BINARIES ON" "BUILD_SHARED_LIBS OFF")      
-# CPMAddPackage(NAME asyncmsg GITHUB_REPOSITORY laoning2008/asyncmsg GIT_TAG master)
+     
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/.. ${CMAKE_CURRENT_SOURCE_DIR}/build/asyncmsg)
 
-add_definitions(-DASYNC_MSG_ENABLE_LOGGING)
+add_executable(tcp_client ${CMAKE_CURRENT_SOURCE_DIR}/tcp_client.cpp)
+target_link_libraries(tcp_client PRIVATE asyncmsg)
 
-
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tcp)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/rpc)
+add_executable(tcp_server ${CMAKE_CURRENT_SOURCE_DIR}/tcp_server.cpp)
+target_link_libraries(tcp_server PRIVATE asyncmsg)

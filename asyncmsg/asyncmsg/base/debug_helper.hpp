@@ -22,9 +22,9 @@ inline static std::string get_time_string() {
 
 
 inline static void print_log(std::string log_content) {
-#ifdef ASYNC_MSG_ENABLE_LOGGING
+//#ifdef ASYNC_MSG_ENABLE_LOGGING
     std::cout << "[" << get_time_string()<< "]"  << "[" << std::this_thread::get_id() << "]" << log_content << std::endl;
-#endif
+//#endif
 }
 
 }

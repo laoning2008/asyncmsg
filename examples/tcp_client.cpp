@@ -15,7 +15,7 @@ int main(int argc, char** argv) {
     });
 
     auto task = [&]() -> asio::awaitable<void> {
-        asio::steady_timer timer(co_await asio::this_coro::executor);
+        asio::steady_timer timer(io_context);
         for (;;) {
             timer.expires_after(std::chrono::milliseconds(1));
             co_await timer.async_wait(asio::use_awaitable);
@@ -25,21 +25,28 @@ int main(int argc, char** argv) {
 
             asyncmsg::base::print_log(std::string("send req, data = ") + (char*)data);
 
-            auto rsp_pack = co_await cli.send_packet_with_retry(pack);
-            if (rsp_pack.packet_body().size() > 0) {
-                asyncmsg::base::print_log(std::string("recv rsp, data = ") + (char*)(rsp_pack.packet_body().data()));
-            } else {
-                asyncmsg::base::print_log("recv rsp failed");
+            auto rsp_pack_opt = co_await cli.send_packet_and_wait_rsp(pack);
+            if (rsp_pack_opt == std::nullopt) {
+                continue;
             }
+            
+            auto rsp_pack = rsp_pack_opt.value();
+            asyncmsg::base::print_log(std::string("recv rsp, data = ") + (char*)(rsp_pack.body().data()));
         }
     };
 
-    for (int i = 0; i < 1000; ++i) {
+    for (int i = 0; i < 10; ++i) {
         asio::co_spawn(io_context, task(), asio::detached);
     }
-
+//    asio::co_spawn(io_context, [&]() -> asio::awaitable<void> {
+//        asio::steady_timer timer(io_context);
+//        timer.expires_after(std::chrono::seconds(5));
+//        co_await timer.async_wait(asio::use_awaitable);
+//        io_context.stop();
+//    }, asio::detached);
+    
     io_context.run();
     
-    std::cout << asyncmsg::base::get_time_string() << ", main exit" << std::endl;
+    asyncmsg::base::print_log("main exit");
     return 0;
 }
