@@ -176,11 +176,6 @@ private:
         if (!buffer_pack_success) {
             base::print_log("buffer pack failed");
         }
-        
-//        asio::co_spawn(io_context, [this, packet = std::move(packet)]() -> asio::awaitable<void> {
-//            co_await(received_request_channels[packet.cmd()]->async_send(asio::error_code{}, std::move(packet), use_nothrow_awaitable)
-//                     || stop_signal.async_wait());
-//        }, asio::detached);
     }
 private:
     asio::io_context io_context;

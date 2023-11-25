@@ -10,7 +10,6 @@
 namespace asyncmsg { namespace tcp {
 
 static std::atomic<uint32_t> seq_generator{0};
-constexpr static uint8_t protocol_version = 1;
 constexpr static uint8_t packet_begin_flag = 0x55;
 constexpr static uint32_t device_id_size = 64;
 
@@ -21,6 +20,7 @@ struct packet_header {
     uint32_t        seq;
     uint8_t         rsp;
     uint32_t        ec;
+    uint32_t        device_id_len;
     char            device_id[device_id_size];
     uint32_t        body_len;
     uint8_t         crc;
@@ -96,6 +96,8 @@ base::ibuffer encode_packet(packet& pack) {
     header.ec = base::host_to_network_32(pack.ec_);
     header.rsp = pack.rsp_ ? 1 : 0;
 
+    header.device_id_len = base::host_to_network_32((uint32_t)pack.device_id_.size());
+    
     memset(header.device_id, 0, sizeof(header.device_id));
     assert(pack.device_id_.size() < sizeof(header.device_id));
     strcpy(header.device_id, pack.device_id_.c_str());
@@ -151,7 +153,9 @@ std::unique_ptr<packet> decode_packet(uint8_t* buf, size_t buf_len, size_t& cons
         uint32_t seq = base::network_to_host_32(header->seq);
         uint32_t ec = base::network_to_host_32(header->ec);
         bool rsp = (header->rsp == 0) ? false : true;
-        std::string device_id = (char*)header->device_id;
+        uint32_t device_id_len = base::network_to_host_32(header->device_id_len);
+        std::string device_id;
+        device_id.assign(header->device_id, header->device_id + device_id_len);
         return std::make_unique<packet>(cmd, rsp, buf_valid + header_length, body_len, device_id, seq, ec);
     } while (1);
     

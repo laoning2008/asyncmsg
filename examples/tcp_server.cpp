@@ -23,7 +23,7 @@ int main(int argc, char** argv) {
             
             auto req_pack = req_pack_opt.value();
             
-            asyncmsg::base::print_log(std::string("recv req, data = ") + (char*)(req_pack.body().data()));
+            asyncmsg::base::print_log("recv req, data = ");
             
             uint8_t data[] = {'w', 'o', 'r', 'l', 'd', '\0'};
             auto rsp_pack = asyncmsg::tcp::build_rsp_packet(req_pack.cmd(), req_pack.seq(), 0, req_pack.device_id(), data, sizeof(data));
