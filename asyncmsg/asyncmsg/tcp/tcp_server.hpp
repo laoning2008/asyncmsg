@@ -1,21 +1,13 @@
 #pragma once
 #include <exception>
 #include <unordered_map>
-#include <set>
+#include <list>
 #include <memory>
 #include <chrono>
-#include <list>
-#include <future>
-#include <cassert>
-
-#include <asio/awaitable.hpp>
-#include <asio/experimental/awaitable_operators.hpp>
-#include <asio/experimental/as_tuple.hpp>
 
 #include <asyncmsg/detail/connection.hpp>
 #include <asyncmsg/base/debug_helper.hpp>
 #include <asyncmsg/base/coroutine_util.hpp>
-#include <asyncmsg/base/async_event.hpp>
 
 
 using namespace std::placeholders;
@@ -26,7 +18,6 @@ class tcp_server final {
 public:
     tcp_server(uint16_t port_)
     : work_guard(io_context.get_executor())
-    , stop_signal(io_context.get_executor())
     , acceptor(io_context.get_executor(), {asio::ip::tcp::v4(), port_}) {
         io_thread = std::thread([this]() {
             io_context.run();
@@ -39,10 +30,8 @@ public:
         base::print_log("~server begin");
 
         asio::post(io_context, [this]() {
-            stop_signal.raise();
-            
-            asio::error_code ec;
-            acceptor.cancel(ec);
+            stopped = true;
+            acceptor.cancel();
             
             for (auto& chan : received_request_channels) {
                 chan.second->cancel();
@@ -60,43 +49,38 @@ public:
         base::print_log("~server end");
     }
 
-    asio::awaitable<void> send_packet(packet pack) {
+    asio::awaitable<void> send_packet(packet& pack) {
         auto task = [&]() -> asio::awaitable<void> {
-            try {
-                auto it_conn = connection_map.find(pack.device_id());
-                if (it_conn != connection_map.end()) {
-                    co_await(it_conn->second->send_packet(pack) || stop_signal.async_wait());
-                }
-            } catch (std::exception& e) {
+            auto it_conn = connection_map.find(pack.device_id());
+            if (it_conn != connection_map.end()) {
+                co_await it_conn->second->send_packet(pack);
             }
         };
 
         co_await base::do_context_aware_task<void>(task, io_context.get_executor());
     }
     
-    asio::awaitable<std::optional<packet>> send_packet_and_wait_rsp(packet pack, uint32_t timeout_seconds = detail::default_timeout, uint32_t max_tries = detail::default_tries) {
+    asio::awaitable<std::optional<packet>> send_packet_and_wait_rsp(packet& pack, uint32_t timeout_seconds = detail::default_timeout, uint32_t max_tries = detail::default_tries) {
         auto task = [&]() -> asio::awaitable<std::optional<packet>> {
             std::optional<packet> rsp_packet = std::nullopt;
             do {
                 for (auto i = 0; i <= max_tries; ++i) {
                     try {
+                        if (stopped) {
+                            break;
+                        }
                         auto it_conn = connection_map.find(pack.device_id());
                         if (it_conn == connection_map.end()) {
                             break;
                         }
                         
-                        auto send_result = co_await(it_conn->second->send_packet(pack, timeout_seconds) || stop_signal.async_wait());
-                        if (send_result.index() == 1) {
-                            base::print_log("send_packet_and_wait_rsp----recv stop signal");
-                            break;
-                        }
-                        
-                        auto packet_opt = std::get<0>(send_result);
+                        auto packet_opt = co_await it_conn->second->send_packet_and_wait_rsp(pack, timeout_seconds);
                         if (rsp_packet != std::nullopt) {
                             rsp_packet = packet_opt.value();
                             break;
                         }
                     } catch (std::exception& e) {
+                        base::print_log("send_packet_and_wait_rsp e = " + std::string(e.what()));
                     }
                 }
             } while (0);
@@ -107,58 +91,38 @@ public:
         co_return co_await base::do_context_aware_task<std::optional<packet>>(task, io_context.get_executor());
     }
     
-    asio::awaitable<std::optional<packet>> async_wait_request(uint32_t cmd) {
-        auto task = [&]() -> asio::awaitable<std::optional<packet>> {
-            std::optional<packet> request_packet = std::nullopt;
-            try {
-                auto it = received_request_channels.find(cmd);
-                if (it == received_request_channels.end()) {
-                    received_request_channels[cmd] = std::make_unique<detail::packet_channel>(io_context, detail::received_packet_channel_size);
-                }
-                
-                auto wait_result = co_await(received_request_channels[cmd]->async_receive(asio::use_awaitable) || stop_signal.async_wait());
-                if (wait_result.index() == 0) {
-                    request_packet = std::get<0>(wait_result);;
-                } else {
-                    base::print_log("async_wait_request----recv stop signal");
-                }
-                
-            } catch (std::exception& e) {
+    asio::awaitable<packet> async_wait_request(uint32_t cmd) {
+        auto task = [&]() -> asio::awaitable<packet> {
+            auto it = received_request_channels.find(cmd);
+            if (it == received_request_channels.end()) {
+                received_request_channels[cmd] = std::make_unique<detail::packet_channel>(io_context, detail::received_packet_channel_size);
             }
             
-            co_return request_packet;
+            co_return co_await received_request_channels[cmd]->async_receive(asio::use_awaitable);
         };
 
-        co_return co_await base::do_context_aware_task<std::optional<packet>>(task, io_context.get_executor());
+        co_return co_await base::do_context_aware_task<packet>(task, io_context.get_executor());
     }
 private:
     void start() {
-        asio::co_spawn(io_context, [this]() -> asio::awaitable<void> {
-            auto result = co_await(accept() || stop_signal.async_wait());
-            if (result.index() == 1) {
-                base::print_log("start----recv stop signal");
-            }
-        }, asio::detached);
+        asio::co_spawn(io_context, accept(), asio::detached);
     }
     
     asio::awaitable<void> accept() {
-        try {
-            for (;;) {
-                auto socket = co_await acceptor.async_accept(asio::use_awaitable);
-                auto conn = std::make_shared<detail::connection>(io_context.get_executor(), std::move(socket)
-                                                         , std::bind(&tcp_server::on_disconnected, this, _1)
-                                                         , std::bind(&tcp_server::on_got_device_id, this, _1, _2)
-                                                         , std::bind(&tcp_server::on_receive_request, this, _1, _2));
-                connections.push_back(conn);
-            }
-        } catch (std::exception& e) {
+        for (;;) {
+            auto socket = co_await acceptor.async_accept(asio::use_awaitable);
+            auto conn = std::make_shared<detail::connection>(io_context.get_executor(), std::move(socket)
+                                                     , std::bind(&tcp_server::on_disconnected, this, _1, _2)
+                                                     , std::bind(&tcp_server::on_got_device_id, this, _1, _2)
+                                                     , std::bind(&tcp_server::on_receive_request, this, _1, _2, _3));
+            connections.push_back(conn);
         }
         
         base::print_log("tcp server accept() end");
     }
     
-    void on_disconnected(detail::connection* conn) {
-        connection_map.erase(conn->device_id());
+    void on_disconnected(detail::connection* conn, const std::string& device_id) {
+        connection_map.erase(device_id);
         std::remove_if(connections.begin(), connections.end(), [conn](const std::shared_ptr<detail::connection>& it) {
             return it.get() == conn;
         });
@@ -171,11 +135,8 @@ private:
         }
     }
     
-    void on_receive_request(detail::connection* connection, packet packet) {
-        auto buffer_pack_success = received_request_channels[packet.cmd()]->try_send(asio::error_code{}, std::move(packet));
-        if (!buffer_pack_success) {
-            base::print_log("buffer pack failed");
-        }
+    void on_receive_request(detail::connection* connection, const std::string& device_id, packet packet) {
+        received_request_channels[packet.cmd()]->try_send(asio::error_code{}, std::move(packet));
     }
 private:
     asio::io_context io_context;
@@ -184,12 +145,12 @@ private:
     
     asio::ip::tcp::acceptor acceptor;
     
+    bool stopped = false;
+    
     detail::received_request_channel_map received_request_channels;
     
     std::unordered_map<std::string, detail::connection*> connection_map;
     std::list<std::shared_ptr<detail::connection>> connections;
-    
-    base::async_event stop_signal;
 };
 
 }}

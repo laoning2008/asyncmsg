@@ -15,15 +15,9 @@ int main(int argc, char** argv) {
 
     auto task = [&]() -> asio::awaitable<void> {
         for (;;) {
-            auto req_pack_opt = co_await srv.async_wait_request(1);
-            if (req_pack_opt == std::nullopt) {
-                asyncmsg::base::print_log("async_wait_request return null packet");
-                break;
-            }
-            
-            auto req_pack = req_pack_opt.value();
-            
-            asyncmsg::base::print_log("recv req, data = ");
+            auto req_pack = co_await srv.async_wait_request(1);
+                        
+            asyncmsg::base::print_log(std::string("recv req, data = ") + (char*)(req_pack.body().data()));
             
             uint8_t data[] = {'w', 'o', 'r', 'l', 'd', '\0'};
             auto rsp_pack = asyncmsg::tcp::build_rsp_packet(req_pack.cmd(), req_pack.seq(), 0, req_pack.device_id(), data, sizeof(data));

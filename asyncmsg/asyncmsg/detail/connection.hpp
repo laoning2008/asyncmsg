@@ -1,5 +1,5 @@
 #pragma once
-
+#include <asyncmsg/base/config.hpp>
 #include <exception>
 #include <unordered_map>
 #include <chrono>
@@ -11,11 +11,9 @@
 #include <asio/write.hpp>
 #include <asio/read.hpp>
 #include <asio/experimental/as_tuple.hpp>
-
 #include <asyncmsg/base/io_buffer.hpp>
 #include <asyncmsg/tcp/packet.hpp>
 #include <asyncmsg/base/debug_helper.hpp>
-#include <asyncmsg/base/async_event.hpp>
 
 using namespace asio::experimental::awaitable_operators;
 constexpr auto use_nothrow_awaitable = asio::as_tuple(asio::use_awaitable);
@@ -29,9 +27,9 @@ constexpr static uint32_t default_tries = 3;
 
 class connection;
 
-using disconnected_callback = std::function<void(connection*)>;
+using disconnected_callback = std::function<void(connection*, const std::string&)>;
 using got_device_id_callback = std::function<void(connection*, const std::string&)>;
-using receive_request_callback = std::function<void(connection*, packet)>;
+using receive_request_callback = std::function<void(connection*, const std::string&, packet)>;
 using packet_channel = asio::experimental::channel<void(asio::error_code, packet)>;
 using received_request_channel_map = std::unordered_map<uint32_t, std::unique_ptr<detail::packet_channel>>;
 
@@ -51,51 +49,30 @@ public:
     , on_got_device_id(on_got_device_id_)
     , on_receive_request(on_receive_request_)
     , device_id_(std::move(device_id_))
-    , last_recv_time(std::chrono::steady_clock::now())
-    , stop_signal(executor_) {
-        base::print_log("connection constructor begin");
+    , last_recv_time(std::chrono::steady_clock::now()) {
         start();
-        base::print_log("connection constructor end");
     }
     
     ~connection() {
-        base::print_log("~connection begin");
-        state = object_state::stopped;
-        stop_signal.raise();
-        
-        asio::error_code ec;
-        socket.cancel(ec);
-        base::print_log("~connection end");
+        base::print_log("~connection");
     }
     
-    asio::awaitable<void> send_packet(packet pack) {
-        if (stopped()) {
-            co_return;
-        }
-        
+    asio::awaitable<void> send_packet(packet& pack) {
         auto pack_buf = encode_packet(pack);
         auto buf = asio::buffer(pack_buf.data(), pack_buf.size());
-        co_await(asio::async_write(socket, buf, asio::use_awaitable) || stop_signal.async_wait());
+        
+        auto weak_this = weak_from_this();
+        co_await asio::async_write(socket, buf, asio::use_awaitable);
     }
     
-    asio::awaitable<std::optional<packet>> send_packet(packet pack, uint32_t timeout_seconds) {
-        if (stopped()) {
-            co_return std::nullopt;
-        }
-        
+    asio::awaitable<std::optional<packet>> send_packet_and_wait_rsp(packet& pack, uint32_t timeout_seconds) {
         auto pack_buf = encode_packet(pack);
         auto buf = asio::buffer(pack_buf.data(), pack_buf.size());
         auto weak_this = weak_from_this();
         
-        auto write_result = co_await(asio::async_write(socket, buf, asio::use_awaitable) || stop_signal.async_wait());
-        
-        if (write_result.index() == 1) {
-            base::print_log("send_packet----recv stop signal");
-            co_return std::nullopt;
-        }
+        co_await asio::async_write(socket, buf, asio::use_awaitable);
         
         if (!weak_this.lock()) {
-            base::print_log("connection object has destructed");
             co_return std::nullopt;
         }
         
@@ -104,20 +81,14 @@ public:
         
         requests[id] = std::make_unique<packet_channel>(executor, 1);
         asio::steady_timer timeout(executor);
+        timeout.expires_from_now(std::chrono::seconds(timeout_seconds));
         
-        try {
-            timeout.expires_from_now(std::chrono::seconds(timeout_seconds));
-            auto result = co_await(requests[id]->async_receive(asio::use_awaitable)
-                                   || timeout.async_wait(asio::use_awaitable)
-                                   || stop_signal.async_wait());
-            if (result.index() == 0) {
-                rsp_packet = std::get<0>(result);
-            } else if (result.index() == 1) {
-                base::print_log("send_packet----timeout");
-            } else {
-                base::print_log("send_packet----recv stop signal");
-            }
-        } catch (std::exception& e) {}
+        auto result = co_await(requests[id]->async_receive(asio::use_awaitable) || timeout.async_wait(asio::use_awaitable));
+        if (result.index() == 0) {
+            rsp_packet = std::get<0>(result);
+        } else if (result.index() == 1) {
+            base::print_log("send_packet----timeout");
+        }
 
         auto shared_this = weak_this.lock();
         if (shared_this) {
@@ -126,28 +97,13 @@ public:
         
         co_return rsp_packet;
     }
-    
-    std::string device_id() const {
-        return device_id_;
-    }
 private:
-    bool stopped() {
-        return state == object_state::stopped;
-    }
-    
     void start() {
         //post to make sure shared_ptr has been constructed
         asio::post(executor, [this]() {
-            auto check_task = [this]() -> asio::awaitable<void> {
-                co_await(check() || stop_signal.async_wait());
-            };
-            
-            auto receive_task = [this]() -> asio::awaitable<void> {
-                co_await(receive_packet() || stop_signal.async_wait());
-            };
-            
-            asio::co_spawn(executor, check_task, asio::detached);
-            asio::co_spawn(executor, receive_task, asio::detached);
+            asio::co_spawn(executor, [this]() -> asio::awaitable<void>  {
+                co_await(receive_packet() || check());
+            }, asio::detached);
         });
     }
     
@@ -165,7 +121,7 @@ private:
             auto elapse = std::chrono::duration_cast<std::chrono::seconds>(now - last_recv_time).count();
             if (e || elapse > active_connection_lifetime_seconds) {
                 base::print_log("connection timeout");
-                on_disconnected(this);
+                on_disconnected(this, device_id_);
                 break;
             }
         }
@@ -177,14 +133,14 @@ private:
             auto size_to_read = (recv_buffer.free_size() > 0) ? recv_buffer.free_size() : recv_buffer.capacity();
             if (size_to_read <= 0) {
                 if (!process_packet(recv_buffer)) {
-                    on_disconnected(this);
+                    on_disconnected(this, device_id_);
                     break;
                 }
             }
             
             size_to_read = (recv_buffer.free_size() > 0) ? recv_buffer.free_size() : recv_buffer.capacity();
             if (size_to_read <= 0) {
-                on_disconnected(this);
+                on_disconnected(this, device_id_);
                 break;
             }
             
@@ -196,7 +152,7 @@ private:
             }
             
             if (e) {
-                on_disconnected(this);
+                on_disconnected(this, device_id_);
                 base::print_log("read err = " + e.message());
                 break;
             }
@@ -204,7 +160,7 @@ private:
             if (read_size > 0) {
                 recv_buffer.commit(read_size);
                 if (!process_packet(recv_buffer)) {
-                    on_disconnected(this);
+                    on_disconnected(this, device_id_);
                     break;
                 }
             }
@@ -251,7 +207,7 @@ private:
                     }
                 }, asio::detached);
             } else {
-                on_receive_request(this, std::move(pack_copy));
+                on_receive_request(this, device_id_, std::move(pack_copy));
             }
         }
         
@@ -264,8 +220,6 @@ private:
         return id;
     }
 private:
-    object_state state{object_state::running};
-    
     asio::io_context::executor_type executor;
     asio::ip::tcp::socket socket;
     std::string device_id_;
@@ -276,7 +230,6 @@ private:
     receive_request_callback on_receive_request;
     
     request_map_t requests;
-    base::async_event stop_signal;
 };
 
 }

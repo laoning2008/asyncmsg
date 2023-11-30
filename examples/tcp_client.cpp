@@ -1,12 +1,14 @@
-#include <asio.hpp>
+#include <asio/signal_set.hpp>
+#include <asyncmsg/base/config.hpp>
 #include <asyncmsg/tcp/tcp_client.hpp>
 #include <asyncmsg/base/debug_helper.hpp>
+#include <asyncmsg/base/string_util.hpp>
 
 int main(int argc, char** argv) {
     asio::io_context io_context(std::thread::hardware_concurrency());
     asio::signal_set signals(io_context, SIGINT, SIGTERM);
 
-    std::string device_id = "test_device_id";
+    std::string device_id = asyncmsg::base::random_string(32);
 
     asyncmsg::tcp::tcp_client cli{"localhost", 5555, device_id};
 
