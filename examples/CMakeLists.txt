@@ -11,6 +11,18 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/.. ${CMAKE_CURRENT_SOURCE_DIR}/buil
 
 add_executable(tcp_client ${CMAKE_CURRENT_SOURCE_DIR}/tcp_client.cpp)
 target_link_libraries(tcp_client PRIVATE asyncmsg)
+set_target_properties(tcp_client PROPERTIES FOLDER "examples")
 
 add_executable(tcp_server ${CMAKE_CURRENT_SOURCE_DIR}/tcp_server.cpp)
 target_link_libraries(tcp_server PRIVATE asyncmsg)
+set_target_properties(tcp_server PROPERTIES FOLDER "examples")
+
+add_executable(rpc_client ${CMAKE_CURRENT_SOURCE_DIR}/rpc_client.cpp example.pb.cc example.pb.h)
+target_link_libraries(rpc_client PRIVATE asyncmsg)
+set_target_properties(rpc_client PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+set_target_properties(rpc_client PROPERTIES FOLDER "examples")
+
+add_executable(rpc_server ${CMAKE_CURRENT_SOURCE_DIR}/rpc_server.cpp example.pb.cc example.pb.h)
+target_link_libraries(rpc_server PRIVATE asyncmsg)
+set_target_properties(rpc_server PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+set_target_properties(rpc_server PROPERTIES FOLDER "examples")

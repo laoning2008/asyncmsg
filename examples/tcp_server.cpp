@@ -15,7 +15,7 @@ int main(int argc, char** argv) {
 
     auto task = [&]() -> asio::awaitable<void> {
         for (;;) {
-            auto req_pack = co_await srv.async_wait_request(1);
+            auto req_pack = co_await srv.wait_request(1);
                         
             asyncmsg::base::print_log(std::string("recv req, data = ") + (char*)(req_pack.body().data()));
             
@@ -27,16 +27,6 @@ int main(int argc, char** argv) {
     };
     
     asio::co_spawn(io_context, task(), asio::detached);
-    
-    
-//    auto exit_task = [&]() ->asio::awaitable<void> {
-//        asio::steady_timer timer(io_context.get_executor());
-//        timer.expires_after(std::chrono::milliseconds(15*1000));
-//        co_await timer.async_wait(asio::use_awaitable);
-//        io_context.stop();
-//    };
-//    asio::co_spawn(io_context.get_executor(), exit_task, asio::detached);
-    
     
     io_context.run();
     

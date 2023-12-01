@@ -1,9 +1,10 @@
 #pragma once
-#include <asyncmsg/base/config.hpp>
+#include <asyncmsg/detail/config.hpp>
 #include <exception>
 #include <unordered_map>
 #include <chrono>
 #include <iostream>
+#include <stdexcept>
 
 #include <asio/awaitable.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
@@ -11,9 +12,10 @@
 #include <asio/write.hpp>
 #include <asio/read.hpp>
 #include <asio/experimental/as_tuple.hpp>
-#include <asyncmsg/base/io_buffer.hpp>
+#include <asyncmsg/detail/io_buffer.hpp>
 #include <asyncmsg/tcp/packet.hpp>
 #include <asyncmsg/base/debug_helper.hpp>
+#include <asyncmsg/tcp/exception.hpp>
 
 using namespace asio::experimental::awaitable_operators;
 constexpr auto use_nothrow_awaitable = asio::as_tuple(asio::use_awaitable);
@@ -22,7 +24,7 @@ namespace asyncmsg { namespace tcp {
 namespace detail {
 
 constexpr static uint32_t received_packet_channel_size = 64;
-constexpr static uint32_t default_timeout = 5;
+constexpr static uint32_t default_timeout = 5*1000;
 constexpr static uint32_t default_tries = 3;
 
 class connection;
@@ -65,7 +67,7 @@ public:
         co_await asio::async_write(socket, buf, asio::use_awaitable);
     }
     
-    asio::awaitable<std::optional<packet>> send_packet_and_wait_rsp(packet& pack, uint32_t timeout_seconds) {
+    asio::awaitable<packet> send_packet_and_wait_rsp(packet& pack, uint32_t timeout_millliseconds) {
         auto pack_buf = encode_packet(pack);
         auto buf = asio::buffer(pack_buf.data(), pack_buf.size());
         auto weak_this = weak_from_this();
@@ -73,29 +75,27 @@ public:
         co_await asio::async_write(socket, buf, asio::use_awaitable);
         
         if (!weak_this.lock()) {
-            co_return std::nullopt;
+            throw invalid_state_error{};
         }
         
-        std::optional<packet> rsp_packet = std::nullopt;
         uint64_t id = gen_packet_id(pack.cmd(), pack.seq());
         
         requests[id] = std::make_unique<packet_channel>(executor, 1);
         asio::steady_timer timeout(executor);
-        timeout.expires_from_now(std::chrono::seconds(timeout_seconds));
+        timeout.expires_from_now(std::chrono::milliseconds(timeout_millliseconds));
         
         auto result = co_await(requests[id]->async_receive(asio::use_awaitable) || timeout.async_wait(asio::use_awaitable));
-        if (result.index() == 0) {
-            rsp_packet = std::get<0>(result);
-        } else if (result.index() == 1) {
+        if (result.index() == 1) {
             base::print_log("send_packet----timeout");
+            throw timeout_error{};
         }
-
+        
         auto shared_this = weak_this.lock();
         if (shared_this) {
             requests.erase(id);
         }
         
-        co_return rsp_packet;
+        co_return std::get<0>(result);
     }
 private:
     void start() {
@@ -128,7 +128,7 @@ private:
     }
     
     asio::awaitable<void> receive_packet() {
-        base::io_buffer recv_buffer(recv_buf_size);
+        asyncmsg::detail::io_buffer recv_buffer(recv_buf_size);
         for (;;) {
             auto size_to_read = (recv_buffer.free_size() > 0) ? recv_buffer.free_size() : recv_buffer.capacity();
             if (size_to_read <= 0) {
@@ -167,7 +167,7 @@ private:
         }
     }
     
-    bool process_packet(base::io_buffer& recv_buffer) {
+    bool process_packet(asyncmsg::detail::io_buffer& recv_buffer) {
         for(;;) {
             size_t consume_len = 0;
             auto pack = decode_packet(recv_buffer.read_head(), recv_buffer.size(), consume_len);

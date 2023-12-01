@@ -1,8 +1,8 @@
 #include <asio/signal_set.hpp>
-#include <asyncmsg/base/config.hpp>
 #include <asyncmsg/tcp/tcp_client.hpp>
 #include <asyncmsg/base/debug_helper.hpp>
 #include <asyncmsg/base/string_util.hpp>
+#include <asyncmsg/rpc/rpc_client.hpp>
 
 int main(int argc, char** argv) {
     asio::io_context io_context(std::thread::hardware_concurrency());
@@ -11,7 +11,7 @@ int main(int argc, char** argv) {
     std::string device_id = asyncmsg::base::random_string(32);
 
     asyncmsg::tcp::tcp_client cli{"localhost", 5555, device_id};
-
+    
     signals.async_wait([&](auto, auto) {
         io_context.stop();
     });
@@ -27,13 +27,9 @@ int main(int argc, char** argv) {
 
             asyncmsg::base::print_log(std::string("send req, data = ") + (char*)data);
 
-            auto rsp_pack_opt = co_await cli.send_packet_and_wait_rsp(pack);
-            if (rsp_pack_opt == std::nullopt) {
-                continue;
-            }
-            
-            auto rsp_pack = rsp_pack_opt.value();
-            asyncmsg::base::print_log(std::string("recv rsp, data = ") + (char*)(rsp_pack.body().data()));
+            auto rsp = co_await cli.send_packet_and_wait_rsp(pack);
+
+            asyncmsg::base::print_log(std::string("recv rsp, data = ") + (char*)(rsp.body().data()));
         }
     };
 

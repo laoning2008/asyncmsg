@@ -3,8 +3,8 @@
 #include <string>
 #include <atomic>
 
-#include <asyncmsg/base/crc.hpp>
-#include <asyncmsg/base/byte_order.hpp>
+#include <asyncmsg/detail/crc.hpp>
+#include <asyncmsg/detail/byte_order.hpp>
 #include <asyncmsg/base/ibuffer.hpp>
 
 namespace asyncmsg { namespace tcp {
@@ -103,7 +103,7 @@ base::ibuffer encode_packet(packet& pack) {
     strcpy(header.device_id, pack.device_id_.c_str());
     
     header.body_len = base::host_to_network_32(pack.body_.size());
-    header.crc = base::calc_crc8((uint8_t*)&header, header_length - 1);
+    header.crc = asyncmsg::detail::calc_crc8((uint8_t*)&header, header_length - 1);
     
     memcpy(data_buf.data(), &header, header_length);
     if (!pack.body_.empty()) {
@@ -131,7 +131,7 @@ std::unique_ptr<packet> decode_packet(uint8_t* buf, size_t buf_len, size_t& cons
         
         packet_header* header = (packet_header*)buf_valid;
         
-        auto crc = base::calc_crc8(buf_valid, header_length - 1);
+        auto crc = asyncmsg::detail::calc_crc8(buf_valid, header_length - 1);
         if (crc != header->crc) {
             ++consume_len;
             continue;

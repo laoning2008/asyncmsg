@@ -1,5 +1,5 @@
 #pragma once
-#include <asyncmsg/base/config.hpp>
+#include <asyncmsg/detail/config.hpp>
 #include <exception>
 #include <unordered_map>
 #include <memory>
@@ -16,9 +16,10 @@
 #include <asio/connect.hpp>
 
 #include <asyncmsg/detail/connection.hpp>
+#include <asyncmsg/detail/coroutine_util.hpp>
 #include <asyncmsg/base/debug_helper.hpp>
+
 #include <asio/experimental/channel.hpp>
-#include <asyncmsg/base/coroutine_util.hpp>
 
 
 using namespace std::placeholders;
@@ -59,55 +60,52 @@ public:
     asio::awaitable<void> send_packet(packet& pack) {
         auto task = [&]() -> asio::awaitable<void> {
             if (reset_device_id_if_needed(pack) && conn != nullptr) {
+                auto shared_conn = conn;
                 co_await conn->send_packet(pack);
             }
         };
 
-        co_await base::do_context_aware_task<void>(task, io_context.get_executor());
+        co_await asyncmsg::detail::do_context_aware_task<void>(task, io_context.get_executor());
     }
 
-    asio::awaitable<std::optional<packet>> send_packet_and_wait_rsp(packet& pack, uint32_t timeout_seconds = detail::default_timeout, uint32_t max_tries = detail::default_tries) {
-        auto task = [&]() -> asio::awaitable<std::optional<packet>> {
-            std::optional<packet> rsp_packet = std::nullopt;
+    asio::awaitable<packet> send_packet_and_wait_rsp(packet& pack, uint32_t timeout_millliseconds = detail::default_timeout) {
+        auto task = [&]() -> asio::awaitable<packet> {
+            if (stopped) {
+                throw invalid_state_error{};
+            }
+            
+            if (!reset_device_id_if_needed(pack)) {
+                throw invalid_device_id_error{};
+            }
+            
             asio::steady_timer wait_timer(io_context.get_executor());
-            do {
-                if (!reset_device_id_if_needed(pack)) {
+            auto begin = std::chrono::steady_clock::now();
+            while (conn == nullptr) {
+                if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - begin).count() > timeout_millliseconds / 2) {
                     break;
                 }
-                
-                for (auto i = 0; i <= max_tries; ++i) {
-                    try {
-                        if (stopped) {
-                            base::print_log("stopped");
-                            break;
-                        }
-                        
-                        if (conn == nullptr) {
-                            base::print_log("wait connection");
-                            wait_timer.expires_from_now(std::chrono::milliseconds(100));
-                            co_await wait_timer.async_wait(asio::use_awaitable);
-                            continue;
-                        }
-                        
-                        auto packet_opt = co_await conn->send_packet_and_wait_rsp(pack, timeout_seconds);
-                        
-                        if (packet_opt != std::nullopt) {
-                            rsp_packet = packet_opt.value();
-                            break;
-                        }
-                    } catch (std::exception& e) {
-                        base::print_log("send_packet_and_wait_rsp e = " + std::string(e.what()));
-                    }
-                }
-            } while (0);
+                wait_timer.expires_from_now(std::chrono::milliseconds(100));
+                co_await wait_timer.async_wait(asio::use_awaitable);
+            }
             
-            co_return rsp_packet;
+            if (conn == nullptr) {
+                throw connection_error{};
+            }
+            
+            uint32_t elapse = (uint32_t)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - begin).count();
+            if (elapse >= timeout_millliseconds) {
+                throw timeout_error{};
+            }
+                        
+            auto shared_conn = conn;
+            co_return co_await conn->send_packet_and_wait_rsp(pack, timeout_millliseconds - elapse);
         };
 
-        co_return co_await base::do_context_aware_task<std::optional<packet>>(task, io_context.get_executor());
+        
+        co_return co_await asyncmsg::detail::do_context_aware_task<packet>(task, io_context.get_executor());
     }
 
-    asio::awaitable<packet> async_wait_request(uint32_t cmd) {
+    asio::awaitable<packet> wait_request(uint32_t cmd) {
         auto task = [&]() -> asio::awaitable<packet> {
             auto it = received_request_channels.find(cmd);
             if (it == received_request_channels.end()) {
@@ -117,7 +115,7 @@ public:
             co_return co_await received_request_channels[cmd]->async_receive(asio::use_awaitable);
         };
 
-        co_return co_await base::do_context_aware_task<packet>(task, io_context.get_executor());
+        co_return co_await asyncmsg::detail::do_context_aware_task<packet>(task, io_context.get_executor());
     }
 private:
     void start() {
