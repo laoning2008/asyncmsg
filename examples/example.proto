@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+message add_req
+{
+    int32 left = 1;
+    int32 right = 2;
+}
+
+message add_rsp
+{
+    int32 result = 1;
+}
+
+message hello_push
+{
+    string hello = 1;
+}

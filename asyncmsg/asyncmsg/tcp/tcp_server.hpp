@@ -137,9 +137,12 @@ private:
     }
     
     void on_got_device_id(detail::connection* conn, const std::string& device_id) {
-        auto it = connection_map.find(device_id);
-        if (it == connection_map.end()) {
-            connection_map[device_id] = conn;
+        for (auto it = connections.begin(); it != connections.end(); ++it) {
+            if ((*it).get() == conn) {
+                connection_map[device_id] = (*it);
+                connections.erase(it);
+                break;
+            }
         }
     }
     
@@ -160,7 +163,7 @@ private:
     
     detail::received_request_channel_map received_request_channels;
     
-    std::unordered_map<std::string, detail::connection*> connection_map;
+    std::unordered_map<std::string, std::shared_ptr<detail::connection>> connection_map;
     std::list<std::shared_ptr<detail::connection>> connections;
 };
 
