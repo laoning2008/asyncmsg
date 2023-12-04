@@ -4,12 +4,6 @@
 #include "example.pb.h"
 
 
-//asyncmsg::rpc::rpc_result<add_rsp> add_handler(add_req& req){
-//    add_rsp rsp;
-//    rsp.set_result(req.left() + req.right());
-//    return asyncmsg::rpc::rpc_result<add_rsp>{rsp};
-//};
-
 int main(int argc, char** argv) {
     asio::io_context io_context(std::thread::hardware_concurrency());
     asio::signal_set signals(io_context, SIGINT, SIGTERM);

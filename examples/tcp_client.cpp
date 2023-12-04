@@ -36,15 +36,8 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 10; ++i) {
         asio::co_spawn(io_context, task(), asio::detached);
     }
-//    asio::co_spawn(io_context, [&]() -> asio::awaitable<void> {
-//        asio::steady_timer timer(io_context);
-//        timer.expires_after(std::chrono::seconds(5));
-//        co_await timer.async_wait(asio::use_awaitable);
-//        io_context.stop();
-//    }, asio::detached);
     
     io_context.run();
-    
     asyncmsg::base::print_log("main exit");
     return 0;
 }
