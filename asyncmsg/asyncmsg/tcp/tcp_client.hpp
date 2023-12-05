@@ -4,33 +4,32 @@
 #include <unordered_map>
 #include <memory>
 #include <chrono>
-#include <future>
 #include <list>
-#include <format>
-#include <unordered_map>
 #include <memory>
 #include <optional>
 
 #include <asio/ip/tcp.hpp>
 #include <asio/detached.hpp>
 #include <asio/connect.hpp>
+#include <asio/experimental/channel.hpp>
 
 #include <asyncmsg/detail/connection.hpp>
 #include <asyncmsg/detail/coroutine_util.hpp>
 #include <asyncmsg/base/debug_helper.hpp>
-
-#include <asio/experimental/channel.hpp>
-
+#include <asyncmsg/detail/lru.hpp>
 
 using namespace std::placeholders;
 
 namespace asyncmsg { namespace tcp {
 
 class tcp_client final {
+    constexpr static uint32_t recently_received_request_cap = 1000;
+    
 public:
     tcp_client(std::string host, const uint16_t port, std::string device_id_)
     : work_guard(io_context.get_executor())
     , device_id(std::move(device_id_))
+    , recently_received_request(recently_received_request_cap)
     , stop_signal(io_context.get_executor(), std::chrono::steady_clock::time_point::max())
     , server_host(std::move(host)), server_port(port) {
         io_thread = std::thread([this]() {
@@ -60,7 +59,6 @@ public:
     asio::awaitable<void> send_packet(packet& pack) {
         auto task = [&]() -> asio::awaitable<void> {
             if (reset_device_id_if_needed(pack) && conn != nullptr) {
-                auto shared_conn = conn;
                 co_await conn->send_packet(pack);
             }
         };
@@ -97,7 +95,6 @@ public:
                 throw timeout_error{};
             }
                         
-            auto shared_conn = conn;
             co_return co_await conn->send_packet_and_wait_rsp(pack, timeout_millliseconds - elapse);
         };
 
@@ -120,8 +117,21 @@ public:
 private:
     void start() {
         asio::co_spawn(io_context, [this]() -> asio::awaitable<void> {
-            co_await(connect() || stop_signal.async_wait(asio::use_awaitable));
+            co_await(connect() || heartbeat() || stop_signal.async_wait(asio::use_awaitable));
         }, asio::detached);
+    }
+    
+    asio::awaitable<void> heartbeat() {
+        asio::steady_timer check_timer(io_context);
+        while (!stopped) {
+            if (conn) {
+                auto heartbeat_pack = asyncmsg::tcp::build_req_packet(detail::heartbeat_cmd, nullptr, 0, device_id);
+                co_await conn->send_packet(heartbeat_pack);
+            }
+            
+            check_timer.expires_after(std::chrono::seconds(detail::active_connection_heartbeat_interval_seconds));
+            co_await check_timer.async_wait(asio::use_awaitable);
+        }
     }
     
     void on_disconnected(detail::connection* connection, const std::string& device_id) {
@@ -131,14 +141,21 @@ private:
     void on_got_device_id(detail::connection* conn, const std::string& device_id) {
     }
     
-    void on_receive_request(detail::connection* connection, const std::string& device_id, packet packet) {
-        received_request_channels[packet.cmd()]->try_send(asio::error_code{}, std::move(packet));
+    void on_receive_request(detail::connection* connection, const std::string& device_id, packet pack) {
+        connection->send_packet_detach(asyncmsg::tcp::build_rsp_packet(pack.cmd(), pack.seq(), 0, device_id, nullptr, 0));
+        auto id = packet_id(pack);
+        if (recently_received_request.exist(id)) {
+            return;
+        }
+        
+        recently_received_request.put(id);
+        received_request_channels[pack.cmd()]->try_send(asio::error_code{}, std::move(pack));
     }
     
     asio::awaitable<void> connect() {
         asio::steady_timer connect_timer(io_context.get_executor());
         
-        for (;;) {
+        while (!stopped) {
             try {
                 if (conn == nullptr) {
                     asio::ip::tcp::resolver resolver(io_context);
@@ -182,6 +199,8 @@ private:
     std::string device_id;
     std::string server_host;
     uint16_t server_port;
+    
+    asyncmsg::detail::lru<uint64_t> recently_received_request;
     
     bool stopped = false;
 

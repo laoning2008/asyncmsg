@@ -31,14 +31,14 @@ constexpr static uint32_t header_length = sizeof(packet_header);
 constexpr static uint32_t max_body_length = 16*1024;
 
 class packet {
-    friend base::ibuffer encode_packet(packet& pack);
+    friend base::ibuffer encode_packet(const packet& pack);
     friend std::unique_ptr<packet> decode_packet(uint8_t* buf, size_t buf_len, size_t& consume_len);
 public:
     packet() : cmd_(0), seq_(0), rsp_(false), ec_(0) {
     }
     
     packet(uint32_t cmd__, bool rsp__, uint8_t* body_buf__, uint32_t body_len__, std::string device_id__, uint32_t seq__, uint32_t ec__ = 0)
-    : cmd_(cmd__), seq_((seq__==0)?++seq_generator:seq__), rsp_(rsp__), ec_(ec__), device_id_(std::move(device_id__)), body_( body_len__, body_buf__) {
+    : cmd_(cmd__), seq_((seq__==0)?next_seq():seq__), rsp_(rsp__), ec_(ec__), device_id_(std::move(device_id__)), body_( body_len__, body_buf__) {
     }
 
     uint32_t cmd() const {
@@ -69,6 +69,14 @@ public:
         return body_;
     }
 private:
+    uint32_t next_seq() {
+        if (seq_generator == UINT_MAX) {
+            seq_generator = 0;
+        }
+        
+        return ++seq_generator;
+    }
+private:
     uint32_t        cmd_;
     uint32_t        seq_;
     bool            rsp_;
@@ -76,6 +84,12 @@ private:
     std::string     device_id_;
     base::ibuffer   body_;
 };
+
+static uint64_t packet_id(packet& pack) {
+    uint64_t id = pack.cmd();
+    id = id << 31 | pack.seq();
+    return id;
+}
 
 static packet build_req_packet(uint32_t cmd, uint8_t* body_buf = nullptr, uint32_t body_len = 0, std::string device_id = {}) {
     return packet{cmd, false, body_buf, body_len, device_id, 0};
@@ -85,29 +99,29 @@ static packet build_rsp_packet(uint32_t cmd, uint32_t seq, uint32_t ec, std::str
     return packet{cmd, true, body_buf, body_len, device_id, seq, ec};
 }
 
-base::ibuffer encode_packet(packet& pack) {
-    auto data_len = header_length + pack.body_.size();
+base::ibuffer encode_packet(const packet& pack) {
+    auto data_len = header_length + pack.body().size();
     auto data_buf = base::ibuffer{data_len};
     
     packet_header header;
     header.flag = packet_begin_flag;
-    header.cmd = base::host_to_network_32(pack.cmd_);
-    header.seq = base::host_to_network_32(pack.seq_);
-    header.ec = base::host_to_network_32(pack.ec_);
-    header.rsp = pack.rsp_ ? 1 : 0;
+    header.cmd = base::host_to_network_32(pack.cmd());
+    header.seq = base::host_to_network_32(pack.seq());
+    header.ec = base::host_to_network_32(pack.ec());
+    header.rsp = pack.is_response() ? 1 : 0;
 
-    header.device_id_len = base::host_to_network_32((uint32_t)pack.device_id_.size());
+    header.device_id_len = base::host_to_network_32((uint32_t)pack.device_id().size());
     
     memset(header.device_id, 0, sizeof(header.device_id));
-    assert(pack.device_id_.size() < sizeof(header.device_id));
-    strcpy(header.device_id, pack.device_id_.c_str());
+    assert(pack.device_id().size() < sizeof(header.device_id));
+    strcpy(header.device_id, pack.device_id().c_str());
     
-    header.body_len = base::host_to_network_32(pack.body_.size());
+    header.body_len = base::host_to_network_32(pack.body().size());
     header.crc = asyncmsg::detail::calc_crc8((uint8_t*)&header, header_length - 1);
     
     memcpy(data_buf.data(), &header, header_length);
-    if (!pack.body_.empty()) {
-        memcpy(data_buf.data() + header_length, pack.body_.data(), pack.body_.size());
+    if (!pack.body().empty()) {
+        memcpy(data_buf.data() + header_length, pack.body().data(), pack.body().size());
     }
     
     return data_buf;

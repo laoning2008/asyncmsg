@@ -146,10 +146,14 @@ private:
         }
     }
     
-    void on_receive_request(detail::connection* connection, const std::string& device_id, packet packet) {
-        auto it = received_request_channels.find(packet.cmd());
-        if (it != received_request_channels.end()) {
-            it->second->try_send(asio::error_code{}, std::move(packet));
+    void on_receive_request(detail::connection* conn, const std::string& device_id, packet pack) {
+        if (pack.cmd() == detail::heartbeat_cmd) {
+            conn->send_packet_detach(asyncmsg::tcp::build_rsp_packet(pack.cmd(), pack.seq(), 0, pack.device_id(), nullptr, 0));
+        } else {
+            auto it = received_request_channels.find(pack.cmd());
+            if (it != received_request_channels.end()) {
+                it->second->try_send(asio::error_code{}, std::move(pack));
+            }
         }
     }
 private:

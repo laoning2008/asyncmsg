@@ -8,8 +8,8 @@ int main(int argc, char** argv) {
     asio::io_context io_context(std::thread::hardware_concurrency());
     asio::signal_set signals(io_context, SIGINT, SIGTERM);
 
-    std::string device_id = "test_device_id";//asyncmsg::base::random_string(32);
-
+    std::string device_id = (argc == 1) ? asyncmsg::base::random_string(32) : argv[1];
+    
     asyncmsg::tcp::tcp_client cli{"localhost", 5555, device_id};
     
     signals.async_wait([&](auto, auto) {
@@ -23,7 +23,7 @@ int main(int argc, char** argv) {
         
         asio::steady_timer timer(co_await asio::this_coro::executor);
         for (;;) {
-            timer.expires_after(std::chrono::milliseconds(1000));
+            timer.expires_after(std::chrono::milliseconds(10));
             co_await timer.async_wait(asio::use_awaitable);
 
             try {

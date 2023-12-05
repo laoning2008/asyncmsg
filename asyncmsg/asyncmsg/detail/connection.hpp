@@ -34,11 +34,14 @@ using got_device_id_callback = std::function<void(connection*, const std::string
 using receive_request_callback = std::function<void(connection*, const std::string&, packet)>;
 using packet_channel = asio::experimental::channel<void(asio::error_code, packet)>;
 using received_request_channel_map = std::unordered_map<uint32_t, std::unique_ptr<detail::packet_channel>>;
+constexpr static uint32_t active_connection_heartbeat_interval_seconds = 20;
+constexpr static uint32_t heartbeat_cmd = 0;
 
 class connection : public std::enable_shared_from_this<connection> {
     constexpr static uint32_t recv_buf_size = 128*1024;
     constexpr static uint32_t active_connection_lifetime_seconds = 60;
     constexpr static uint32_t active_connection_lifetime_check_interval_seconds = 1;
+
     
     using request_map_t = std::unordered_map<uint64_t, std::unique_ptr<packet_channel>>;
     enum class object_state {running, stopped};
@@ -59,12 +62,22 @@ public:
         base::print_log("~connection");
     }
     
-    asio::awaitable<void> send_packet(packet& pack) {
+    
+    asio::awaitable<void> send_packet(const packet& pack) {
         auto pack_buf = encode_packet(pack);
         auto buf = asio::buffer(pack_buf.data(), pack_buf.size());
         
-        auto weak_this = weak_from_this();
+        base::print_log("send packet cmd = " + std::to_string(pack.cmd()) + ", seq = " + std::to_string(pack.seq()));
+
         co_await asio::async_write(socket, buf, asio::use_awaitable);
+    }
+    
+    void send_packet_detach(packet pack) {
+        asio::co_spawn(executor, [weak_this = weak_from_this(), this, pack = std::move(pack)]() -> asio::awaitable<void> {
+            if (weak_this.lock()) {
+                co_await send_packet(pack);
+            }
+        }, asio::detached);
     }
     
     asio::awaitable<packet> send_packet_and_wait_rsp(packet& pack, uint32_t timeout_millliseconds) {
@@ -72,13 +85,15 @@ public:
         auto buf = asio::buffer(pack_buf.data(), pack_buf.size());
         auto weak_this = weak_from_this();
         
+        base::print_log("send_packet_and_wait_rsp cmd = " + std::to_string(pack.cmd()) + ", seq = " + std::to_string(pack.seq()));
+        
         co_await asio::async_write(socket, buf, asio::use_awaitable);
         
         if (!weak_this.lock()) {
             throw invalid_state_error{};
         }
         
-        uint64_t id = gen_packet_id(pack.cmd(), pack.seq());
+        uint64_t id = packet_id(pack);
         
         requests[id] = std::make_unique<packet_channel>(executor, 1);
         asio::steady_timer timeout(executor);
@@ -170,54 +185,43 @@ private:
     bool process_packet(asyncmsg::detail::io_buffer& recv_buffer) {
         for(;;) {
             size_t consume_len = 0;
-            auto pack = decode_packet(recv_buffer.read_head(), recv_buffer.size(), consume_len);
+            auto pack_ptr = decode_packet(recv_buffer.read_head(), recv_buffer.size(), consume_len);
             recv_buffer.consume(consume_len);
             
-            if (!pack) {
+            if (!pack_ptr) {
                 return true;
             }
             
-            if (pack->device_id().empty()) {
+            if (pack_ptr->device_id().empty()) {
                 continue;
             }
             
             if (device_id_.empty()) {
-                device_id_ = pack->device_id();
+                device_id_ = pack_ptr->device_id();
                 on_got_device_id(this, device_id_);
-            } else if (device_id_ != pack->device_id()) {
+            } else if (device_id_ != pack_ptr->device_id()) {
                 return false;
             }
             
             last_recv_time = std::chrono::steady_clock::now();
             
-            auto pack_copy = *pack;
+            auto pack = *pack_ptr;
             
-            if (pack_copy.is_response()) {
-                uint64_t pack_id = gen_packet_id(pack_copy.cmd(), pack_copy.seq());
-                
-                base::print_log("recv rsp cmd = " + std::to_string(pack_copy.cmd()) + ", seq = " + std::to_string(pack_copy.seq()));
-                
-                auto weak_this = weak_from_this();
-                asio::co_spawn(executor, [weak_this, pack_id, pack = std::move(pack_copy), this]() -> asio::awaitable<void> {
-                    if (weak_this.lock()) {
-                        auto it = requests.find(pack_id);
-                        if (it != requests.end()) {
-                            co_await it->second->async_send(asio::error_code{}, std::move(pack), use_nothrow_awaitable);
-                        }
-                    }
-                }, asio::detached);
+            base::print_log("recv packet cmd = " + std::to_string(pack.cmd()) + ", seq = " + std::to_string(pack.seq()));
+            
+            if (pack.is_response()) {
+                uint64_t pack_id = packet_id(pack);
+                                
+                auto it = requests.find(pack_id);
+                if (it != requests.end()) {
+                    it->second->try_send(asio::error_code{}, std::move(pack));
+                }
             } else {
-                on_receive_request(this, device_id_, std::move(pack_copy));
+                on_receive_request(this, device_id_, std::move(pack));
             }
         }
         
         return true;
-    }
-    
-    uint64_t gen_packet_id(uint32_t cmd, uint32_t seq) {
-        uint64_t id = cmd;
-        id = id << 31 | seq;
-        return id;
     }
 private:
     asio::io_context::executor_type executor;
