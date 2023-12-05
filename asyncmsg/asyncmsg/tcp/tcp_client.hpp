@@ -121,19 +121,6 @@ private:
         }, asio::detached);
     }
     
-    asio::awaitable<void> heartbeat() {
-        asio::steady_timer check_timer(io_context);
-        while (!stopped) {
-            if (conn) {
-                auto heartbeat_pack = asyncmsg::tcp::build_req_packet(detail::heartbeat_cmd, nullptr, 0, device_id);
-                co_await conn->send_packet(heartbeat_pack);
-            }
-            
-            check_timer.expires_after(std::chrono::seconds(detail::active_connection_heartbeat_interval_seconds));
-            co_await check_timer.async_wait(asio::use_awaitable);
-        }
-    }
-    
     void on_disconnected(detail::connection* connection, const std::string& device_id) {
         conn = nullptr;
     }
@@ -177,12 +164,24 @@ private:
             }
 
             connect_timer.expires_from_now(std::chrono::milliseconds(100));
-            co_await connect_timer.async_wait(use_nothrow_awaitable);
+            co_await connect_timer.async_wait(asio::use_awaitable);
         }
-        
-        base::print_log("start() exit");
     }
 
+    asio::awaitable<void> heartbeat() {
+        asio::steady_timer check_timer(io_context);
+        while (!stopped) {
+            if (conn != nullptr) {
+                auto heartbeat_pack = asyncmsg::tcp::build_req_packet(detail::heartbeat_cmd, nullptr, 0, device_id);
+                co_await conn->send_packet(heartbeat_pack);
+            }
+            
+            check_timer.expires_after(std::chrono::seconds(detail::active_connection_heartbeat_interval_seconds));
+            co_await check_timer.async_wait(asio::use_awaitable);
+
+        }
+    }
+    
     bool reset_device_id_if_needed(packet& pack) {
         if (pack.device_id().empty()) {
             pack.set_device_id(device_id);

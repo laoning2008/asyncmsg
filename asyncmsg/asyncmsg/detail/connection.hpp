@@ -127,14 +127,14 @@ private:
         for (;;) {
             check_timer.expires_after(std::chrono::seconds(active_connection_lifetime_check_interval_seconds));
             auto weak_this = weak_from_this();
-            auto [e] = co_await check_timer.async_wait(use_nothrow_awaitable);
+            co_await check_timer.async_wait(asio::use_awaitable);
             if (!weak_this.lock()) {
                 break;
             }
             
             auto now = std::chrono::steady_clock::now();
             auto elapse = std::chrono::duration_cast<std::chrono::seconds>(now - last_recv_time).count();
-            if (e || elapse > active_connection_lifetime_seconds) {
+            if (elapse > active_connection_lifetime_seconds) {
                 base::print_log("connection timeout");
                 on_disconnected(this, device_id_);
                 break;
