@@ -40,20 +40,31 @@ public:
 
     ~tcp_client() {
         base::print_log("~tcp_client bedin");
-        asio::post(io_context, [this]() {
-            stopped = true;
+        stop(true);
+        if (io_thread.joinable()) {
+            io_thread.join();
+        }
+        base::print_log("~tcp_client end");
+    }
+    
+    void stop(bool force) {
+        if (stopped) {
+            return;
+        }
+        
+        stopped = true;
+        asio::post(io_context, [this, force]() {
             stop_signal.cancel();
             conn = nullptr;
             for (auto& channel : received_request_channels) {
                 channel.second->cancel();
             }
             work_guard.reset();
+            
+            if (force) {
+                io_context.stop();
+            }
         });
-        
-        if (io_thread.joinable()) {
-            io_thread.join();
-        }
-        base::print_log("~tcp_client end");
     }
     
     asio::awaitable<void> send_packet(packet& pack) {
@@ -201,7 +212,7 @@ private:
     
     asyncmsg::detail::lru<uint64_t> recently_received_request;
     
-    bool stopped = false;
+    std::atomic<bool> stopped{false};
 
     std::shared_ptr<detail::connection> conn;
     detail::received_request_channel_map received_request_channels;

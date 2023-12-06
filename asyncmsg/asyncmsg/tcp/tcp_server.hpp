@@ -29,24 +29,36 @@ public:
     ~tcp_server() {
         base::print_log("~server begin");
 
-        asio::post(io_context, [this]() {
-            stopped = true;
+        stop(true);
+        if (io_thread.joinable()) {
+            io_thread.join();
+        }
+        
+        base::print_log("~server end");
+    }
+    
+    void stop(bool force) {
+        if (stopped) {
+            return;
+        }
+        
+        stopped = true;
+        asio::post(io_context, [this, force]() {
             acceptor.cancel();
-            
+
             for (auto& chan : received_request_channels) {
                 chan.second->cancel();
             }
-            
+
             connection_map.clear();
             connections.clear();
 
             work_guard.reset();
+            
+            if (force) {
+                io_context.stop();
+            }
         });
-        
-        if (io_thread.joinable()) {
-            io_thread.join();
-        }
-        base::print_log("~server end");
     }
 
     asio::awaitable<void> send_packet(packet& pack) {

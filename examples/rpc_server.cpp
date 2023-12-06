@@ -17,14 +17,32 @@ int main(int argc, char** argv) {
         io_context.stop();
     });
 
-    std::function<asyncmsg::rpc::rpc_result<add_rsp>(add_req&)> add_handler = [](add_req& req) -> asyncmsg::rpc::rpc_result<add_rsp> {
+//    auto add_handler = [](add_req& req) -> asyncmsg::rpc::rpc_result<add_rsp> {
+//        add_rsp rsp;
+//        rsp.set_result(req.left() + req.right());
+//        return asyncmsg::rpc::rpc_result<add_rsp>{rsp};
+//    };
+//    
+//    auto async_add_handler = [](add_req& req) -> asio::awaitable<asyncmsg::rpc::rpc_result<add_rsp>> {
+//        add_rsp rsp;
+//        rsp.set_result(req.left() + req.right());
+//        co_return asyncmsg::rpc::rpc_result<add_rsp>{rsp};
+//    };
+//    
+    
+    asyncmsg::rpc::register_sync_handler<add_req, add_rsp>(io_context.get_executor(), srv, "add", [](add_req& req) -> asyncmsg::rpc::rpc_result<add_rsp> {
         add_rsp rsp;
         rsp.set_result(req.left() + req.right());
         return asyncmsg::rpc::rpc_result<add_rsp>{rsp};
-    };
-    asyncmsg::rpc::register_sync_handler<add_req, add_rsp>(io_context.get_executor(), srv, "add", add_handler);
+    });
+    asyncmsg::rpc::register_async_handler<add_req, add_rsp>(io_context.get_executor(), srv, "async_add", [](add_req& req) -> asio::awaitable<asyncmsg::rpc::rpc_result<add_rsp>> {
+        add_rsp rsp;
+        rsp.set_result(req.left() + req.right());
+        co_return asyncmsg::rpc::rpc_result<add_rsp>{rsp};
+    });
 
-    auto task = [&push_device_id, &srv, &io_context, add_handler]() -> asio::awaitable<void> {
+    
+    auto task = [&push_device_id, &srv, &io_context]() -> asio::awaitable<void> {
         if (push_device_id.empty()) {
             co_return;
         }
